@@ -31,7 +31,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+/* ADC 参考电压: VREF+ 接 VDDA, 本板为 3.3V */
+#define ADC_VREF             3.3f
+/* 12 位 ADC 满量程值 */
+#define ADC_FULL_SCALE       4095.0f
+/* 每个通道的采样时间, 信号源内阻较大时可改为 ADC_SAMPLETIME_239CYCLES_5 */
+#define ADC_SAMPLING_TIME    ADC_SAMPLETIME_55CYCLES_5
+/* 每个通道的过采样次数, 用于简单均值滤波 */
+#define ADC_OVERSAMPLING     4U
+/* 单次转换的等待超时, 单位 ms */
+#define ADC_TIMEOUT_MS       10U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -44,7 +53,7 @@ ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 
 /* USER CODE BEGIN PV */
-
+/* 引脚 -> 通道: PB0=ADC2_IN8(R7), PB1=ADC2_IN9(R6), PA7=ADC1_IN7(R5), PA6=ADC1_IN6(R4) */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -53,7 +62,7 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 /* USER CODE BEGIN PFP */
-
+static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -93,12 +102,26 @@ int main(void)
   MX_ADC1_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
+  /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里 */
   int R_6;
   int R_7;
+  int R_5;
+  int R_4;
+  /* 各引脚测得的电压, 单位 V */
   float INA_I_IN;
   float INA_V_IN;
   float INA_I_OUT;
   float INA_V_OUT;
+
+  /* ADC 校准: 上电后各执行一次, 可消除内部电容误差, 提高转换精度 */
+  if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,6 +131,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* 读取各引脚电压并送入 INA 变量, 单位 V */
+    INA_I_OUT = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8)/R_7;   /* PB0/R7 */
+    INA_I_IN  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9)/R_6;   /* PB1/R6 */
+    INA_V_OUT = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7);   /* PA7/R5 */
+    INA_V_IN  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6);   /* PA6/R4 */
+
+    HAL_Delay(100);
   }
   /* USER CODE END 3 */
 }
@@ -270,7 +300,54 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  读取指定 ADC 的一个通道, 返回该通道的电压值 (已做均值滤波).
+  * @note   CubeMX 中 ADC 配置为 "ScanConvMode = Disable, NbrOfConversion = 1",
+  *         因此这里在每次转换前把目标通道写入规则组 Rank1, 逐个通道轮流采集,
+  *         不需要修改 MX_ADCx_Init() 生成的代码, 也不需要 DMA.
+  * @param  hadc    : ADC 句柄, hadc1 或 hadc2
+  * @param  channel : ADC 通道宏, 例如 ADC_CHANNEL_6
+  * @retval 电压值, 单位 V; 转换失败时返回 0.0f
+  */
+static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+  uint32_t sum = 0U;
+  uint32_t i;
 
+  /* 停止并关闭 ADC, 保证修改通道配置时 ADC 处于空闲状态 */
+  HAL_ADC_Stop(hadc);
+
+  /* 把目标通道配置到规则组的第 1 个转换 */
+  sConfig.Channel = channel;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLING_TIME;
+  if (HAL_ADC_ConfigChannel(hadc, &sConfig) != HAL_OK)
+  {
+    return 0.0f;
+  }
+
+  /* 软件启动转换, 多次采样求平均以抑制噪声 */
+  for (i = 0U; i < ADC_OVERSAMPLING; i++)
+  {
+    if (HAL_ADC_Start(hadc) != HAL_OK)
+    {
+      HAL_ADC_Stop(hadc);
+      return 0.0f;
+    }
+    if (HAL_ADC_PollForConversion(hadc, ADC_TIMEOUT_MS) != HAL_OK)
+    {
+      HAL_ADC_Stop(hadc);
+      return 0.0f;
+    }
+    sum += HAL_ADC_GetValue(hadc);
+  }
+
+  HAL_ADC_Stop(hadc);
+
+  /* 12 位 ADC: V = 码值 / 4095 * VREF */
+  return ((float)sum / (float)ADC_OVERSAMPLING) * ADC_VREF / ADC_FULL_SCALE;
+}
 /* USER CODE END 4 */
 
 /**

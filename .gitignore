@@ -1,0 +1,18 @@
+# Build output
+build/
+cmake-build-*/
+
+# Firmware artifacts
+*.elf
+*.hex
+*.bin
+*.map
+*.su
+
+# Object / dependency files
+*.o
+*.obj
+*.d
+
+# macOS
+.DS_Store

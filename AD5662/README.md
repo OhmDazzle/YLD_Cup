@@ -39,11 +39,23 @@ AD5662 是**只写**器件，没有 SDO 回读引脚。
 
 CPOL = Low + CPHA = 1 Edge 即 **SPI Mode 1**：SCLK 空闲低，器件在**下降沿**锁存 DIN。这两项选错会整体错位一位，输出直接不对。
 
-9 MHz 远低于 VDD = 3.3V 时的 20 MHz 上限（PCLK1 = 36 MHz，4 分频）。
+9 MHz 低于 AD5662 在 VDD = 2.7~3.6 V 时的 20 MHz 上限（PCLK1 = 36 MHz，4 分频）。
 
-### 务必检查
+### ⚠️ 重新生成代码前必读
 
-- **PB12 初始电平建议设为 High**。当前 `MX_GPIO_Init()` 里生成的是 `RESET`，即上电后到 `AD5662_Init()` 执行前 SYNC 一直处于选中状态。目前无害（这段时间没有时钟），但 SYNC 空闲高才是正确状态。
+`YLD_Cup.ioc` 与当前代码**并不同步**：
+
+- `SPI2.IPParameters` 只记录了 `VirtualType,Mode,Direction,CalculateBaudRate`，**`CLKPolarity` / `CLKPhase` / `DataSize` / `FirstBit` / `NSS` / `BaudRatePrescaler` 都没存进去**。
+- `ProjectManager.functionlistsort` 里**没有 `MX_SPI2_Init`**，说明 .ioc 在 SPI2 加进来之后没重新生成过。
+- .ioc 的 `SPI2.Direction=SPI_DIRECTION_2LINES` 与 `PB13/PB15.Mode=TX_Only_Simplex_Unidirect_Master` **自相矛盾**。
+
+后果：直接在 CubeMX 里点 "Generate Code"，`MX_SPI2_Init()` 会被按 .ioc 覆盖，上面那个表里的参数（尤其是 CPOL/CPHA）可能回到默认值，**输出会整体错位**。
+
+**做法**：在 CubeMX 里按上表把 SPI2 重配一遍再生成，让 .ioc 成为唯一事实来源。生成后 diff 一下 `MX_SPI2_Init()`，确认 7 项参数都对得上。
+
+### 其他检查项
+
+- **PB12 初始电平建议设为 High**（CubeMX 里 GPIO 配置页的 GPIO output level）。当前 `MX_GPIO_Init()` 生成的是 `RESET`，即上电后到 `AD5662_Init()` 执行前 SYNC 一直处于选中状态。目前无害（这段时间没有 SCLK），但 SYNC 空闲高才是正确状态。注意 `HAL_GPIO_WritePin(...GPIO_PIN_RESET)` 这行在生成区，改用户区会被下次生成冲掉。
 - 不启用 SPI2 时 `HAL_SPI_MODULE_ENABLED` 是注释状态，`Drivers/` 下没有 `stm32f1xx_hal_spi.c/h`，驱动**编译不过**。必须在 CubeMX 里启用并重新生成代码。
 
 ### CMakeLists.txt
@@ -114,7 +126,9 @@ void AD5662_Init(AD5662_t *dev, SPI_HandleTypeDef *hspi, GPIO_TypeDef *sync_port
 
 返回：无。
 
-内部动作：保存配置 → SYNC 拉高（空闲态）→ 显式写入 0 码。显式写 0 是为了让 AD5662-1（上电复位到零刻度）和 AD5662-2（上电复位到中间刻度）两种型号上电行为统一为输出 0V。**不需要这个行为就删掉函数末尾那行 `AD5662_WriteCode`。**
+内部动作：校验三个指针 → 保存配置 → SYNC 拉高（空闲态）→ 显式写入 0 码。显式写 0 是为了让 AD5662-1（上电复位到零刻度）和 AD5662-2（上电复位到中间刻度）两种型号上电行为统一为输出 0V。**不需要这个行为就删掉函数末尾那行 `AD5662_WriteCode`。**
+
+`dev` / `hspi` / `sync_port` 任一为 `NULL` 时直接返回，不做任何事。
 
 `sync_port` / `sync_pin` 需已在 CubeMX 里配成 `GPIO_MODE_OUTPUT_PP`。
 
@@ -176,7 +190,7 @@ HAL_StatusTypeDef AD5662_SetPowerDown(AD5662_t *dev, AD5662_PowerDown_t mode);
 | `dev` | 设备句柄 |
 | `mode` | 掉电模式，见 `AD5662_PowerDown_t` |
 
-返回：`HAL_OK` 表示 SPI 传输成功，其余为 HAL 错误码。
+返回：`HAL_OK` 表示 SPI 传输成功，其余为 HAL 错误码。**`mode` 不是 `AD5662_PowerDown_t` 的合法值时返回 `HAL_ERROR`**，且此时不触碰 SYNC、总线上无任何动作。
 
 传 `AD5662_PD_NORMAL` 即恢复输出。也可以直接调 `AD5662_SetVoltage()` 唤醒，因为写新码值时 PD 位默认为 00。
 
@@ -195,9 +209,9 @@ uint16_t AD5662_VoltageToCode(const AD5662_t *dev, float voltage);
 | `dev` | 设备句柄 |
 | `voltage` | 目标电压，单位 V |
 
-返回：0 … 65535。`dev == NULL` 或 `vref <= 0` 时返回 0。
+返回：0 … 65535。`dev == NULL`、`vref` 或 `voltage` 为负或 `NaN` 时返回 0。
 
-钳位规则与 `AD5662_SetVoltage` 一致。
+钳位规则与 `AD5662_SetVoltage` 一致。两处判断都写的是 `!(x > 0.0f)` 而不是 `x <= 0.0f`，这样 `NaN` 会被一并挡住——`NaN` 与任何值比较都返回假，会一路穿到 `(uint16_t)` 强转，而浮点转无符号整数在值不可表示时是未定义行为（C11 6.3.1.4）。
 
 ---
 
@@ -280,6 +294,18 @@ SYNC 由 GPIO 手动控制，**不用硬件 NSS**。硬件 NSS 会每字节拉�
 
 `AD5662_WriteFrame` 里无论 `HAL_SPI_Transmit` 成败都会把 SYNC 拉高。如果失败时把它留在低电平，器件会一直等待后续时钟，下一帧的前几个边沿就会被错当成上一帧的续传。
 
+### 写函数不可重入
+
+`AD5662_WriteFrame` 的 **"SYNC 拉低 → SPI 传输 → SYNC 拉高" 不是原子序列**。如果在中断和主循环里同时调用写函数，两帧会交错，SYNC 被提前拉高，器件按上面那条规则把整帧丢弃——现象是"偶尔一次写入不生效"，很难查。
+
+三个写函数（`AD5662_WriteCode` / `AD5662_SetVoltage` / `AD5662_SetPowerDown`）必须在单一上下文里调用，或者自行加临界区。
+
+`AD5662_VoltageToCode` / `AD5662_CodeToVoltage` 不碰总线，可以在中断里安全调用。
+
+### 掉电模式参数会被校验
+
+`AD5662_PowerDown_t` 只有 4 个合法值。传进非法值时 `AD5662_WriteFrame` 直接返回 `HAL_ERROR` 且**不动 SYNC**（总线上无动作），不会像 `mode & 0x03` 那样被静默截断成某个合法模式。
+
 ### 传递函数
 
 ```
@@ -338,4 +364,7 @@ int main(void)
 - **器件只写**，`AD5662_GetCode()` 返回的是软件记录值，不是芯片回读值。
 - **输出无法达到 VREF 的轨**：满量程码 65535 对应 `3.3 × 65535/65536 ≈ 3.29995 V`，比 VREF 低 1 LSB。且输出放大器在接近轨时会有几十 mV 的压降，实际满量程输出略低于 3.3V，需要精确满量程时应实测标定。
 - **VREF 直接取自 3.3V 电源时，输出精度受电源纹波影响**。要求高的话应外接基准源（如 ADR444），驱动代码无需改动，只改 `AD5662_Init()` 的 `vref` 实参。
-- `AD5662_VoltageToCode()` / `AD5662_CodeToVoltage()` 不发起传输，可以在中断或高频循环里安全调用；其余函数会阻塞在 SPI 传输上（9 MHz 下约 2.7 µs）。
+- `AD5662_VoltageToCode()` / `AD5662_CodeToVoltage()` 不发起传输，可以在中断或高频循环里安全调用；其余函数会阻塞在 SPI 传输上（9 MHz 下 3 字节约 2.7 µs）。写函数**不可重入**，见第 5 节。
+- **忘记调 `AD5662_Init()` 不会 HardFault**。`AD5662_WriteFrame()` 在动手之前会校验句柄：`dev` / `dev->hspi` / `dev->sync_port` 任一为 `NULL` 就返回 `HAL_ERROR`，总线上无动作。这一条不是多余的——`static AD5662_t dac;` 是零初始化的，忘了 Init 直接调 `AD5662_SetVoltage()` 时这三个指针全是 `NULL`，而 `HAL_GPIO_WritePin()` **完全不校验 `GPIOx`**、`HAL_SPI_Transmit()` 也只校验 `pData`，两者都会直接解引用空指针。
+- **`AD5662_Init()` 同样校验 `dev` / `hspi` / `sync_port`**，任一为 `NULL` 就直接返回，不做任何事。
+- **`AD5662_VoltageToCode()` 会挡住 `NaN`**：`NaN` 与任何值比较都为假，不挡住的话会一路穿到 `(uint16_t)` 强转，而浮点转无符号整数在值不可表示时是未定义行为（C11 6.3.1.4）。`dev->vref` 和 `voltage` **两个**入参都做了这道防护，判断都写成 `!(x > 0.0f)` 而不是 `x <= 0.0f`——后者挡不住 `NaN`。`AD5662_SetVoltage()` 传入 `NaN` 时会退化成输出 0V。

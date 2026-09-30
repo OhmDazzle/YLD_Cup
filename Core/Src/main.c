@@ -114,11 +114,15 @@ int main(void)
   /* 起始电压 1.23V: 对应码值 24427, 实际输出 24427 * 3.3 / 65536 = 1.22998V */
   AD5662_SetVoltage(&dac, 1.23f);
 
-  /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里 */
-  int R_6 = 0;
-  int R_7 = 0;
-  int R_5;
-  int R_4;
+  /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里. 用 float 而非 int: 电流是浮点
+     运算, 整型会在隐式转换时丢精度并触发 -Wconversion */
+  float R_6 = 0.0f;
+  float R_7 = 0.0f;
+  float R_5 = 0.0f;
+  float R_4 = 0.0f;
+  /* R_5 / R_4 预留给 V_IN / V_OUT 的分压换算, 分压比确定前先显式忽略 */
+  (void)R_5;
+  (void)R_4;
   /* 各引脚测得的电压, 单位 V */
   float INA_I_IN = 0;
   float INA_V_IN = 0;
@@ -143,9 +147,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* 读取各引脚电压并送入 INA 变量, 单位 V */
-    INA_I_OUT = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8)/R_7;   /* PB0/R7 */
-    INA_I_IN  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9)/R_6;   /* PB1/R6 */
+    /* 读取各引脚电压并送入 INA 变量, 单位 V.
+       电阻值未填(0)时不做除法: 浮点除零会得到 inf/NaN, 静默污染后续所有 INA 计算 */
+    INA_I_OUT = (R_7 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) / R_7) : 0.0f;   /* PB0/R7 */
+    INA_I_IN  = (R_6 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) / R_6) : 0.0f;   /* PB1/R6 */
     INA_V_OUT = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7);   /* PA7/R5 */
     INA_V_IN  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6);   /* PA6/R4 */
 
@@ -312,12 +317,17 @@ static void MX_SPI2_Init(void)
   /* SPI2 parameter configuration*/
   hspi2.Instance = SPI2;
   hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  /* 单线发送: AD5662 只写不回读, 不占用 PB14, 与 .ioc 里 PB13/PB15 的
+     TX_Only_Simplex_Unidirect_Master 保持一致 */
+  hspi2.Init.Direction = SPI_DIRECTION_1LINE;
   hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  /* CPOL=Low + CPHA=1Edge 即 SPI Mode 1: AD5662 在 SCLK 下降沿锁存 DIN.
+     这两项选错会整体错位一位, 改这里必须同步改 YLD_Cup.ioc */
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  /* PCLK1 = 36MHz, 4 分频 = 9MHz. AD5662 在 VDD = 2.7~3.6V 时 fSCLK 上限 20MHz */
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;

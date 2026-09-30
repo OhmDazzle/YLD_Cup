@@ -32,7 +32,9 @@ static HAL_StatusTypeDef AD5662_WriteFrame(AD5662_t *dev, uint16_t code,
 void AD5662_Init(AD5662_t *dev, SPI_HandleTypeDef *hspi, GPIO_TypeDef *sync_port,
                  uint16_t sync_pin, float vref)
 {
-  if (dev == NULL)
+  /* hspi / sync_port 必须一并检查: HAL_SPI_Transmit() 只校验 pData, 不校验 hspi,
+     传 NULL 进去会直接解引用空指针 */
+  if ((dev == NULL) || (hspi == NULL) || (sync_port == NULL))
   {
     return;
   }
@@ -98,14 +100,19 @@ uint16_t AD5662_VoltageToCode(const AD5662_t *dev, float voltage)
 {
   float code;
 
-  /* 参考电压非法时无法换算, 只能给 0 */
-  if ((dev == NULL) || (dev->vref <= 0.0f))
+  /* 参考电压非法时无法换算, 只能给 0.
+     同样写成 !(dev->vref > 0.0f): 若 vref 是 NaN, "NaN <= 0.0f" 为假, 下面
+     voltage >= dev->vref 也为假, code 会算成 NaN, 最后卡在 (uint16_t)code 上 */
+  if ((dev == NULL) || !(dev->vref > 0.0f))
   {
     return 0U;
   }
 
-  /* 输出轨到轨但无法超出 VREF, 两端直接钳位, 避免下标越界 */
-  if (voltage <= 0.0f)
+  /* 输出轨到轨但无法超出 VREF, 两端直接钳位, 避免下标越界.
+     写成 !(voltage > 0.0f) 而不是 voltage <= 0.0f, 是为了顺带挡住 NaN:
+     NaN 与任何值比较都返回假, 会一路穿到 (uint16_t)code, 而浮点转无符号整数
+     在值不可表示时是未定义行为 (C11 6.3.1.4) */
+  if (!(voltage > 0.0f))
   {
     return 0U;
   }
@@ -173,6 +180,21 @@ static HAL_StatusTypeDef AD5662_WriteFrame(AD5662_t *dev, uint16_t code,
 {
   uint8_t        buf[3];
   HAL_StatusTypeDef status;
+
+  /* 没调 AD5662_Init() 就对零初始化的句柄 (如 static AD5662_t dac;) 调写函数时,
+     hspi / sync_port 都还是 NULL. HAL_GPIO_WritePin() 完全不校验 GPIOx,
+     HAL_SPI_Transmit() 也只校验 pData, 两者都会直接解引用空指针而 HardFault */
+  if ((dev == NULL) || (dev->hspi == NULL) || (dev->sync_port == NULL))
+  {
+    return HAL_ERROR;
+  }
+
+  /* 掉电模式只占 PD1/PD0 两位, 非法枚举值必须报错而不是被 & 0x03 静默截断
+     (强转成无符号后比较, 负数也会落到分支里). 此处尚未动 SYNC, 总线上无动作 */
+  if ((uint32_t)mode > (uint32_t)AD5662_PD_TRISTATE)
+  {
+    return HAL_ERROR;
+  }
 
   buf[0] = (uint8_t)((uint8_t)mode & 0x03U); /* DB23..DB16: 无关位填 0 */
   buf[1] = (uint8_t)(code >> 8);             /* DB15..DB8               */

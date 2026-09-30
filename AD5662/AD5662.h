@@ -17,7 +17,13 @@
   *    Clock Polarity    : Low          \
   *    Clock Phase       : 1 Edge        > 即 SPI Mode 1, 器件在下降沿锁存 DIN
   *    NSS               : Software
-  *    Baud Rate         : PCLK1(36MHz)/4 = 9MHz, 远低于 3.3V 下的 20MHz 上限
+  *    Baud Rate         : Prescaler 4 -> PCLK1(36MHz)/4 = 9MHz, 低于 20MHz 上限
+  *
+  *  !! 上述参数尚未全部存进 YLD_Cup.ioc (IPParameters 里缺 CLKPolarity /
+  *     CLKPhase / DataSize / FirstBit / NSS / BaudRatePrescaler), 且 .ioc 的
+  *     SPI2.Direction 与 PB13/PB15 的 TX_Only 引脚模式自相矛盾.
+  *     用 CubeMX 重新生成代码前, 必须先按上表把 SPI2 重配一遍, 否则
+  *     MX_SPI2_Init() 会被按 .ioc 覆盖, CPOL/CPHA 一旦回到默认就会整体错位.
   *
   *  数据帧 (24 位, MSB 先行):
   *    DB23 .. DB18 : 无关位
@@ -29,13 +35,21 @@
   *    VOUT = VREF * D / 65536      D = 0 .. 65535
   *    VREF = 3.3V 时 1 LSB = 3.3 / 65536 ≈ 50.35 uV
   *
-  *  注意: AD5662 是只写器件, 没有 SDO 回读引脚.
+  *  注意 1: AD5662 是只写器件, 没有 SDO 回读引脚.
+  *
+  *  注意 2: 三个写函数 (WriteCode / SetVoltage / SetPowerDown) 不可重入.
+  *          AD5662_WriteFrame 的 "SYNC 拉低 -> SPI 传输 -> SYNC 拉高" 不是原子
+  *          序列, 若在中断和主循环里同时调用, 两帧会交错, SYNC 提前拉高会被
+  *          器件判为中断帧而整帧丢弃 (见下面 "SYNC 必须包住整帧" 一节).
+  *          需要多上下文调用时, 请自行加临界区.
+  *          AD5662_VoltageToCode / AD5662_CodeToVoltage 不碰总线, 可安全用于中断.
   ******************************************************************************
   */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef __AD5662_H
-#define __AD5662_H
+/* 不用 __AD5662_H: 双下划线开头的标识符是 C 标准保留给实现的 (C11 7.1.3) */
+#ifndef AD5662_H
+#define AD5662_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,7 +102,8 @@ typedef struct
 
 /**
   * @brief  初始化驱动并让输出归零.
-  * @note   SYNC 引脚需已在 CubeMX 里配成 GPIO_MODE_OUTPUT_PP.
+  * @note   dev / hspi / sync_port 任一为 NULL 时直接返回, 不做任何事.
+  *         SYNC 引脚需已在 CubeMX 里配成 GPIO_MODE_OUTPUT_PP.
   *         函数内部会显式写入 0 码, 因此无论器件是 AD5662-1 (上电复位到零刻度)
   *         还是 AD5662-2 (上电复位到中间刻度), 上电输出都是 0V.
   *         若不需要这个行为, 删掉函数末尾的 AD5662_WriteCode 调用即可.
@@ -132,6 +147,7 @@ HAL_StatusTypeDef AD5662_SetPowerDown(AD5662_t *dev, AD5662_PowerDown_t mode);
 
 /**
   * @brief  电压 -> 码值换算 (不发起传输).
+  * @note   dev 为 NULL, 或 vref / voltage 非法 (<= 0 或 NaN) 时返回 0.
   * @param  dev     : 设备句柄
   * @param  voltage : 目标电压, 单位 V
   * @retval 0 .. 65535
@@ -157,4 +173,4 @@ uint16_t AD5662_GetCode(const AD5662_t *dev);
 }
 #endif
 
-#endif /* __AD5662_H */
+#endif /* AD5662_H */

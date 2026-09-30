@@ -56,6 +56,8 @@ SPI_HandleTypeDef hspi2;
 
 /* USER CODE BEGIN PV */
 /* 引脚 -> 通道: PB0=ADC2_IN8(R7), PB1=ADC2_IN9(R6), PA7=ADC1_IN7(R5), PA6=ADC1_IN6(R4) */
+/* AD5662: PB13=SCLK, PB15=DIN, PB12=SYNC, VREF=3.3V */
+static AD5662_t dac;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -106,6 +108,12 @@ int main(void)
   MX_ADC2_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
+  /* 初始化 AD5662: 走 SPI2, SYNC 接 PB12, 参考电压 3.3V. 初始化后输出 0V */
+  AD5662_Init(&dac, &hspi2, GPIOB, GPIO_PIN_12, 3.3f);
+
+  /* 起始电压 1.23V: 对应码值 24427, 实际输出 24427 * 3.3 / 65536 = 1.22998V */
+  AD5662_SetVoltage(&dac, 1.23f);
+
   /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里 */
   int R_6 = 0;
   int R_7 = 0;

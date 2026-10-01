@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "AD5662.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

@@ -86,6 +86,14 @@ uint8_t OLED_DisplayBuf[8][128];
 
 /*引脚配置*********************/
 
+/*引脚定义：SCL 接 PA4，SDA 接 PA5*/
+/*如需更换引脚，只需修改以下四个宏，其余代码无需改动*/
+/*注意：若 SCL 与 SDA 被改到不同端口，需在 OLED_GPIO_Init 里同时使能两个端口的时钟*/
+#define OLED_SCL_PORT		GPIOA
+#define OLED_SCL_PIN		GPIO_PIN_4
+#define OLED_SDA_PORT		GPIOA
+#define OLED_SDA_PIN		GPIO_PIN_5
+
 /**
   * 函    数：OLED写SCL高低电平
   * 参    数：要写入SCL的电平值，范围：0/1
@@ -97,7 +105,7 @@ uint8_t OLED_DisplayBuf[8][128];
 void OLED_W_SCL(uint8_t BitValue)
 {
 	/*根据BitValue的值，将SCL置高电平或者低电平*/
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, (GPIO_PinState)BitValue);
+	HAL_GPIO_WritePin(OLED_SCL_PORT, OLED_SCL_PIN, (GPIO_PinState)BitValue);
 	
 	/*如果单片机速度过快，可在此添加适量延时，以避免超出I2C通信的最大速度*/
 	//...
@@ -114,7 +122,7 @@ void OLED_W_SCL(uint8_t BitValue)
 void OLED_W_SDA(uint8_t BitValue)
 {
 	/*根据BitValue的值，将SDA置高电平或者低电平*/
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, (GPIO_PinState)BitValue);
+	HAL_GPIO_WritePin(OLED_SDA_PORT, OLED_SDA_PIN, (GPIO_PinState)BitValue);
 
 	
 	/*如果单片机速度过快，可在此添加适量延时，以避免超出I2C通信的最大速度*/
@@ -139,16 +147,16 @@ void OLED_GPIO_Init(void)
 	}
 	
 	/*将SCL和SDA引脚初始化为开漏模式*/
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
 	
 	GPIO_InitTypeDef GPIO_InitStructure;
  	GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_OD;
 	GPIO_InitStructure.Pull = GPIO_NOPULL;
 	GPIO_InitStructure.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStructure.Pin = GPIO_PIN_8;
- 	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
-	GPIO_InitStructure.Pin = GPIO_PIN_9;
- 	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
+	GPIO_InitStructure.Pin = OLED_SCL_PIN;
+ 	HAL_GPIO_Init(OLED_SCL_PORT, &GPIO_InitStructure);
+	GPIO_InitStructure.Pin = OLED_SDA_PIN;
+ 	HAL_GPIO_Init(OLED_SDA_PORT, &GPIO_InitStructure);
 	
 	/*释放SCL和SDA*/
 	OLED_W_SCL(1);

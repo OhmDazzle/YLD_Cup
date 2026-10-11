@@ -28,10 +28,47 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+/* 应用状态机 (题目 1.1 / 1.2 / 2.1 + 恒流模式) */
+typedef enum
+{
+  APP_ST_SELF_TEST = 0,   /* 开机自检 (蜂鸣 3 声) */
+  APP_ST_STANDBY,         /* 待机: 无输出 */
+  APP_ST_CV,              /* 恒压模式 */
+  APP_ST_CC,              /* 恒流模式 */
+  APP_ST_PROT_OCP,        /* 过流保护: 关输出 + 报警, 手动解除 */
+  APP_ST_PROT_UVP,        /* 欠压保护: 关输出 + 报警, 自动恢复 */
+} AppState_t;
+
+/* 按键事件 */
+typedef enum
+{
+  KEY_EV_NONE = 0,
+  KEY_EV_SHORT,           /* 短按 (松手时产生) */
+  KEY_EV_LONG,            /* 长按 (按住超过 KEY_LONG_MS, 只产生一次) */
+} KeyEvent_t;
+
+/* 按键对象 */
+typedef struct
+{
+  GPIO_TypeDef *port;
+  uint16_t      pin;
+  uint8_t       stable;     /* 消抖后的稳定电平: 1=松开, 0=按下 */
+  uint8_t       count;      /* 电平抖动计数 */
+  uint16_t      holdMs;     /* 本次按住已持续时长 */
+  uint8_t       longFired;  /* 已产生过长按事件 */
+  KeyEvent_t    event;      /* 本次扫描产生的事件 */
+} Key_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+/* ============================================================================
+ * 应用层可调参数 —— 集中放在这里, 后期修改只动这一块
+ * ==========================================================================*/
+
+/* ---- ADC 基础参数 ---- */
 /* ADC 参考电压: VREF+ 接 VDDA, 本板为 3.3V */
 #define ADC_VREF             3.3f
 /* 12 位 ADC 满量程值 */
@@ -42,20 +79,74 @@
 #define ADC_OVERSAMPLING     4U
 /* 单次转换的等待超时, 单位 ms */
 #define ADC_TIMEOUT_MS       10U
-/* V_IN / V_OUT 的分压比: 引脚电压需乘该系数还原为实际电压 */
-#define V_DIVIDER_RATIO      7.0f
-/* OLED 全局字体: 6X8, 每字符宽 6px 高 8px(汉字会显示成 ?) */
+
+/* ---- 采样调度: "电压组 / 电流组"的时间占比 (任意正整数, 表示相对比例) ----
+ * 恒压模式把更多采样时间给电压, 恒流模式把更多给电流.
+ * 例如 4:1 = 每 4+1 个循环拍里, 4 拍采电压组 (Vin/Vout), 1 拍采电流组 (Iin/Iout);
+ * 想改占比直接改这四个数 (例如 9:1), 两边都配 0 时退化为只采电压组 */
+#define CV_VOLT_SLOTS        4U    /* 恒压模式: 电压组时隙数 */
+#define CV_CURR_SLOTS        1U    /* 恒压模式: 电流组时隙数 */
+#define CC_VOLT_SLOTS        1U    /* 恒流模式: 电压组时隙数 */
+#define CC_CURR_SLOTS        4U    /* 恒流模式: 电流组时隙数 */
+
+/* ---- 测量通道线性标定: 真值 = (ADC 电压 - offset) × scale ----
+ * offset / scale 都按实测标定填; 下面先给理论值, 拿万用表/台式表对比后再修.
+ * 电压通道 scale 约等于分压比; 电流通道 scale = 1 / (分流电阻 × INA199 增益),
+ *   INA199 增益看芯片丝印: OBG=50 倍 -> scale 4.0; OBH=100 倍 -> 2.0; OBI=200 倍 -> 1.0 */
+#define VIN_ADC_OFFSET       0.0f
+#define VIN_ADC_SCALE        7.0f    /* PA7 = INA_V_IN  (输入电压 ÷7 后进 ADC) */
+#define VOUT_ADC_OFFSET      0.0f
+#define VOUT_ADC_SCALE       7.0f    /* PA6 = INA_V_OUT (输出电压 ÷7 后进 ADC) */
+#define IIN_ADC_OFFSET       0.0f
+#define IIN_ADC_SCALE        4.0f    /* PB1 = 输入电流 (5mΩ 分流, INA199 暂按 50 倍) */
+#define IOUT_ADC_OFFSET      0.0f
+#define IOUT_ADC_SCALE       4.0f    /* PB0 = 输出电流 (5mΩ 分流, INA199 暂按 50 倍) */
+
+/* ---- DAC -> 输出电压传递关系 (理论值 Vout ≈ A - B × V_DAC, 实测后修正) ----
+ * 由注入网络 R10=10k / R1=2.5k / R11=1.2k 推得: Vout ≈ 16.4 - 4 × V_DAC */
+#define VOUT_DAC_A           16.4f
+#define VOUT_DAC_B           4.0f
+#define DAC_VMAX             3.3f    /* AD5662 参考电压 (输出上限) */
+
+/* ---- 运行目标与步进 (题目 1.2 / 2.2 / 恒流模式) ---- */
+#define VOUT_TARGET_DEFAULT  8.0f    /* 恒压模式默认目标电压 */
+#define VOUT_TARGET_MIN      5.0f    /* 步进调压下限 */
+#define VOUT_TARGET_MAX      15.0f   /* 步进调压上限 */
+#define VOUT_STEP            1.0f    /* 步进 1V */
+#define IOUT_TARGET_DEFAULT  1.0f    /* 恒流模式默认目标电流 */
+#define IOUT_TARGET_MIN      0.2f
+#define IOUT_TARGET_MAX      2.0f
+#define IOUT_STEP            0.1f
+
+/* ---- 保护阈值 (题目 2.1) ---- */
+#define OCP_TRIP_A           2.3f    /* Iout 超过 -> 过流保护 (手动解除) */
+#define UVP_TRIP_V           12.5f   /* Vin 低于 -> 欠压保护 (自动恢复) */
+#define UVP_RECOVER_V        13.0f   /* Vin 回升到该值 -> 自动恢复 (留迟滞) */
+#define PROT_BLANK_MS        300U    /* 合闸后的保护屏蔽时间, 防浪涌误触发 */
+
+/* ---- 时序 ---- */
+#define APP_LOOP_PERIOD_MS   10U     /* 主循环节拍 */
+#define DISPLAY_REFRESH_MS   100U    /* 屏幕刷新周期 */
+#define KEY_DEBOUNCE_MS      20U     /* 按键消抖时间 */
+#define KEY_LONG_MS          800U    /* 长按判定时间 */
+#define BEEP_ON_MS           200U    /* 开机蜂鸣: 每声时长 */
+#define BEEP_GAP_MS          500U    /* 开机蜂鸣: 两声间隔 (题目 1.1) */
+#define BEEP_STARTUP_TIMES   3U      /* 开机蜂鸣次数 */
+
+/* ---- 按键索引 (K1=A8 升, K2=B11 降, K3=B9 功能键; 按下=低) ---- */
+#define KEY_IDX_UP           0U
+#define KEY_IDX_DOWN         1U
+#define KEY_IDX_FUNC         2U
+
+/* ---- OLED 布局 (6×8 字体; 行距 8px) ---- */
 #define OLED_FONT            OLED_6X8
-#define OLED_FONT_W          6U
-#define OLED_FONT_H          8U
-/* 数值列起始 x: 名字区最宽 5 字符(V_OUT / I_OUT) = 30px, 再空一个字符 */
+/* 数值列 x: 标签区最宽 4 字符 (24px) + 12px 间隙 */
 #define OLED_VALUE_X         36U
 #define OLED_FLOAT_INT_LEN   2U
-#define OLED_FLOAT_FRA_LEN   3U
-/* 数值区宽度: (整数位 + 小数位 + 符号 + 小数点) * 字符宽度 */
-#define OLED_VALUE_W         ((OLED_FLOAT_INT_LEN + OLED_FLOAT_FRA_LEN + 2U) * OLED_FONT_W)
-/* 单位字符的 x 坐标: 数值右边空一个字符再写 */
-#define OLED_UNIT_X          (OLED_VALUE_X + OLED_VALUE_W + OLED_FONT_W)
+#define OLED_FLOAT_FRA_LEN   2U
+/* 单位列 x: 数值最宽 "+15.00" 6 字符 = 36px, 后留 6px */
+#define OLED_UNIT_X          78U
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -70,9 +161,40 @@ ADC_HandleTypeDef hadc2;
 SPI_HandleTypeDef hspi2;
 
 /* USER CODE BEGIN PV */
-/* 引脚 -> 通道: PB0=ADC2_IN8(R7), PB1=ADC2_IN9(R6), PA7=ADC1_IN7(R5), PA6=ADC1_IN6(R4) */
+/* 引脚 -> 通道 (以使用手册 V3.3 为准):
+ *   PA7 = INA_V_IN  (输入电压 ÷7),  PA6 = INA_V_OUT (输出电压 ÷7)   -> ADC1
+ *   PB1 = 输入电流,                  PB0 = 输出电流                   -> ADC2
+ * 输出通断 MOS: B10 (高=导通);  蜂鸣器 MOS: A2 (高=响)
+ * 按键: A8=K1 升, B11=K2 降, B9=K3 功能键 (上拉输入, 按下=低) */
 /* AD5662: PB13=SCLK, PB15=DIN, PB12=SYNC, VREF=3.3V */
 static AD5662_t dac;
+
+/* ---- 状态机 ---- */
+static AppState_t appState = APP_ST_SELF_TEST;
+static AppState_t stateBeforeProtect = APP_ST_CV;  /* 保护前的运行模式, 恢复用 */
+static uint32_t   protBlankUntil = 0U;             /* 合闸屏蔽期截止时刻 */
+static uint8_t    buzzerMuted = 0U;                /* 欠压保护下按 K3 暂时静音 */
+
+/* ---- 设定值 ---- */
+static float targetV = VOUT_TARGET_DEFAULT;
+static float targetI = IOUT_TARGET_DEFAULT;
+
+/* ---- 测量值 (已按标定系数换算) ---- */
+static float measVin  = 0.0f;
+static float measVout = 0.0f;
+static float measIin  = 0.0f;
+static float measIout = 0.0f;
+
+/* ---- 按键 (K1 / K2 / K3) ---- */
+static Key_t keys[3] =
+{
+  { GPIOA, GPIO_PIN_8,  1U, 0U, 0U, 0U, KEY_EV_NONE },
+  { GPIOB, GPIO_PIN_11, 1U, 0U, 0U, 0U, KEY_EV_NONE },
+  { GPIOB, GPIO_PIN_9,  1U, 0U, 0U, 0U, KEY_EV_NONE },
+};
+
+/* ---- 循环节拍 ---- */
+static uint32_t lastDisplayTick = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -83,6 +205,23 @@ static void MX_ADC2_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel);
+
+/* 应用层函数 */
+static void  App_SetState(AppState_t next);
+static void  App_OutputEnable(uint8_t on);
+static void  App_Buzzer(uint8_t on);
+static void  App_PlayStartupBeeps(void);
+static void  App_SampleVoltageGroup(void);
+static void  App_SampleCurrentGroup(void);
+static void  App_SampleScheduler(void);
+static void  App_ScanKeys(void);
+static void  App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev);
+static void  App_ControlStep(void);
+static void  App_ProtectionCheck(void);
+static void  App_UpdateDisplay(void);
+static float App_TargetToDac(float vout);
+static float App_Clamp(float v, float lo, float hi);
+static char *App_StateText(AppState_t st);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -123,44 +262,20 @@ int main(void)
   MX_ADC2_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  /* 初始化 OLED: 软件 I2C, SCL=PA4, SDA=PA5, 内部含清屏 */
+  /* ---- OLED: 软件 I2C, SCL=PA4, SDA=PA5, 内部含清屏 ---- */
   OLED_Init();
-  /* 标签和单位都是静态的, 只在上电时画一次; 数值在循环里局部刷新 */
-  OLED_ShowString(0, 0,  "V_OUT", OLED_FONT);
-  OLED_ShowString(0, 16, "V_IN",  OLED_FONT);
-  OLED_ShowString(0, 32, "I_IN",  OLED_FONT);
-  OLED_ShowString(0, 48, "I_OUT", OLED_FONT);
-  /* 单位: 电压是 V, 电流是 A */
-  OLED_ShowChar(OLED_UNIT_X, 0,  'V', OLED_FONT);
-  OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
-  OLED_ShowChar(OLED_UNIT_X, 32, 'A', OLED_FONT);
-  OLED_ShowChar(OLED_UNIT_X, 48, 'A', OLED_FONT);
-  OLED_Update();
 
-  /* 初始化 AD5662: 走 SPI2, SYNC 接 PB12, 参考电压 3.3V. 初始化后输出 0V */
+  /* 输出 MOS 默认关断 (上电即待机无输出, 题目 1.1), 显式再关一次双保险 */
+  App_OutputEnable(0U);
+  App_Buzzer(0U);
+  App_UpdateDisplay();                 /* 先显示 "Power Manager" + SELF TEST */
+
+  /* ---- AD5662: SPI2, SYNC=PB12, 参考电压 3.3V ---- */
   AD5662_Init(&dac, &hspi2, GPIOB, GPIO_PIN_12, 3.3f);
+  /* 按理论传递关系开环预置到 8V 目标 (DAC ≈ 2.1V), 之后合闸过冲最小;
+     实测后可修正 VOUT_DAC_A/B, 或等闭环接管 */
+  (void)AD5662_SetVoltage(&dac, App_TargetToDac(VOUT_TARGET_DEFAULT));
 
-  /* 起始电压 1.23V: 对应码值 24427, 实际输出 24427 * 3.3 / 65536 = 1.22998V */
-  AD5662_SetVoltage(&dac, 1.23f);
-
-  /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里. 用 float 而非 int: 电流是浮点
-     运算, 整型会在隐式转换时丢精度并触发 -Wconversion */
-  float R_6 = 0.005f;
-  float R_7 = 0.005f;
-  float R_5 = 0.0f;
-  float R_4 = 0.0f;
-  /* V_IN / V_OUT 的分压换算改用 V_DIVIDER_RATIO 常数, R_5 / R_4 暂不参与计算 */
-  (void)R_5;
-  (void)R_4;
-  /* 各引脚测得的电压, 单位 V */
-  float INA_I_IN = 0;
-  float INA_V_IN = 0;
-  float INA_I_OUT = 0;
-  float INA_V_OUT = 0;
-  float I_IN = 0;
-  float I_OUT = 0;
-  float V_IN = 0;
-  float V_OUT = 0;
   /* ADC 校准: 上电后各执行一次, 可消除内部电容误差, 提高转换精度 */
   if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
   {
@@ -170,6 +285,15 @@ int main(void)
   {
     Error_Handler();
   }
+  /* 先各采一组, 让显示与保护逻辑一上来就有有效数据 */
+  App_SampleVoltageGroup();
+  App_SampleCurrentGroup();
+  App_UpdateDisplay();
+
+  /* 开机蜂鸣 3 声, 每次间隔约 0.5s (题目 1.1), 之后进入待机 */
+  App_PlayStartupBeeps();
+  App_SetState(APP_ST_STANDBY);
+  App_UpdateDisplay();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -179,31 +303,36 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* 读取各引脚电压并送入 INA 变量, 单位 V.
-       电阻值未填(0)时不做除法: 浮点除零会得到 inf/NaN, 静默污染后续所有 INA 计算 */
-    INA_I_OUT = (R_7 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) / R_7) : 0.0f;   /* PB0/R7 */
-    INA_I_IN  = (R_6 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) / R_6) : 0.0f;   /* PB1/R6 */
-    /* V_IN / V_OUT 经分压后接到 ADC, 直接读 ADC 再乘分压比还原为实际电压 */
-    INA_V_OUT = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) * V_DIVIDER_RATIO;   /* PA7/R5 */
-    INA_V_IN  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) * V_DIVIDER_RATIO;   /* PA6/R4 */
+    uint32_t now = HAL_GetTick();
 
-    V_OUT= INA_V_OUT;
-    V_IN = INA_V_IN;
-    I_IN = INA_I_OUT * 4;
-    I_OUT = INA_I_OUT *4;
+    /* 1. 按键扫描 + 事件分发 (K1/K2/K3 分工见 App_HandleKeyEvent 注释) */
+    App_ScanKeys();
+    for (uint8_t i = 0U; i < 3U; i++)
+    {
+      if (keys[i].event != KEY_EV_NONE)
+      {
+        App_HandleKeyEvent(i, keys[i].event);
+      }
+    }
 
-    /* 刷到 OLED: 标签上电时已画好, 这里只刷数值区. 四行的 y 都落在 8px 页边界上,
-       高度正好一个页(8px), 局部刷新不会带掉相邻行的内容 */
-    OLED_ShowFloatNum(OLED_VALUE_X, 0,  V_OUT, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
-    OLED_ShowFloatNum(OLED_VALUE_X, 16, V_IN,  OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
-    OLED_ShowFloatNum(OLED_VALUE_X, 32, I_IN,  OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
-    OLED_ShowFloatNum(OLED_VALUE_X, 48, I_OUT, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
-    OLED_UpdateArea(OLED_VALUE_X, 0,  OLED_VALUE_W, OLED_FONT_H);
-    OLED_UpdateArea(OLED_VALUE_X, 16, OLED_VALUE_W, OLED_FONT_H);
-    OLED_UpdateArea(OLED_VALUE_X, 32, OLED_VALUE_W, OLED_FONT_H);
-    OLED_UpdateArea(OLED_VALUE_X, 48, OLED_VALUE_W, OLED_FONT_H);
+    /* 2. 采样调度: 按当前模式的"电压/电流时间占比"轮流采两组信号 */
+    App_SampleScheduler();
 
-    HAL_Delay(100);
+    /* 3. 闭环控制 (占位): 后续 PID 在这里实现 */
+    App_ControlStep();
+
+    /* 4. 保护检查: 过流 / 欠压 + 欠压自动恢复 (题目 2.1) */
+    App_ProtectionCheck();
+
+    /* 5. 显示刷新 (固定周期, 不用每拍都刷) */
+    if ((now - lastDisplayTick) >= DISPLAY_REFRESH_MS)
+    {
+      lastDisplayTick = now;
+      App_UpdateDisplay();
+    }
+
+    /* 6. 主循环节拍 */
+    HAL_Delay(APP_LOOP_PERIOD_MS);
   }
   /* USER CODE END 3 */
 }
@@ -495,6 +624,428 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
 
   /* 12 位 ADC: V = 码值 / 4095 * VREF */
   return ((float)sum / (float)ADC_OVERSAMPLING) * ADC_VREF / ADC_FULL_SCALE;
+}
+
+/* --------------------------------------------------------------------------
+ * 应用层实现
+ * -------------------------------------------------------------------------- */
+
+static float App_Clamp(float v, float lo, float hi)
+{
+  if (v < lo)
+  {
+    return lo;
+  }
+  if (v > hi)
+  {
+    return hi;
+  }
+  return v;
+}
+
+/* 目标电压 -> DAC 输出电压. 理论关系 Vout ≈ VOUT_DAC_A - VOUT_DAC_B × V_DAC,
+ * 反解并限幅到 [0, DAC_VMAX]; 实测后可修正 VOUT_DAC_A/B */
+static float App_TargetToDac(float vout)
+{
+  return App_Clamp((VOUT_DAC_A - vout) / VOUT_DAC_B, 0.0f, DAC_VMAX);
+}
+
+/* 输出通断 MOS: B10 高电平导通 (使用手册) */
+static void App_OutputEnable(uint8_t on)
+{
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* 蜂鸣器 MOS: A2 高电平导通 */
+static void App_Buzzer(uint8_t on)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* 开机蜂鸣: 响 BEEP_ON_MS, 停 BEEP_GAP_MS, 共 BEEP_STARTUP_TIMES 次 (题目 1.1).
+ * 只在启动阶段调用, 阻塞可接受 */
+static void App_PlayStartupBeeps(void)
+{
+  uint8_t i;
+
+  for (i = 0U; i < BEEP_STARTUP_TIMES; i++)
+  {
+    App_Buzzer(1U);
+    HAL_Delay(BEEP_ON_MS);
+    App_Buzzer(0U);
+    HAL_Delay(BEEP_GAP_MS);
+  }
+}
+
+/* 采电压组: 输入/输出电压. 真值 = (ADC 电压 - offset) × scale, 系数见文件头部 */
+static void App_SampleVoltageGroup(void)
+{
+  measVin  = (ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) - VIN_ADC_OFFSET)  * VIN_ADC_SCALE;  /* PA7 */
+  measVout = (ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) - VOUT_ADC_OFFSET) * VOUT_ADC_SCALE; /* PA6 */
+}
+
+/* 采电流组: 输入/输出电流 */
+static void App_SampleCurrentGroup(void)
+{
+  measIin  = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) - IIN_ADC_OFFSET)  * IIN_ADC_SCALE;  /* PB1 */
+  measIout = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) - IOUT_ADC_OFFSET) * IOUT_ADC_SCALE; /* PB0 */
+}
+
+/* 采样调度器: 每个循环拍消费一个"时隙".
+ * 恒压模式偏向电压 (CV_VOLT_SLOTS : CV_CURR_SLOTS), 恒流模式偏向电流 (CC_*),
+ * 占比宏在文件头部, 想调就改那里 */
+static void App_SampleScheduler(void)
+{
+  static uint8_t slot = 0U;
+  uint8_t voltSlots;
+  uint8_t currSlots;
+  uint8_t total;
+
+  voltSlots = (appState == APP_ST_CC) ? CC_VOLT_SLOTS : CV_VOLT_SLOTS;
+  currSlots = (appState == APP_ST_CC) ? CC_CURR_SLOTS : CV_CURR_SLOTS;
+  total = (uint8_t)(voltSlots + currSlots);
+
+  if (total == 0U)                 /* 防呆: 宏都配 0 时退化为全采电压 */
+  {
+    App_SampleVoltageGroup();
+    return;
+  }
+  if (slot >= total)
+  {
+    slot = 0U;
+  }
+
+  if (slot < voltSlots)
+  {
+    App_SampleVoltageGroup();
+  }
+  else
+  {
+    App_SampleCurrentGroup();
+  }
+  slot++;
+}
+
+/* 按键扫描: 上拉输入, 按下=低. 消抖 KEY_DEBOUNCE_MS, 长按 KEY_LONG_MS.
+ * 短按在松手时产生; 长按在按住达到阈值时产生一次, 之后松手不再产生短按 */
+static void App_ScanKeys(void)
+{
+  uint8_t i;
+
+  for (i = 0U; i < 3U; i++)
+  {
+    uint8_t raw = (HAL_GPIO_ReadPin(keys[i].port, keys[i].pin) == GPIO_PIN_RESET) ? 0U : 1U;
+
+    keys[i].event = KEY_EV_NONE;
+
+    if (raw != keys[i].stable)
+    {
+      if (keys[i].count < 0xFFU)
+      {
+        keys[i].count++;
+      }
+      if (((uint32_t)keys[i].count * APP_LOOP_PERIOD_MS) >= KEY_DEBOUNCE_MS)
+      {
+        keys[i].stable = raw;
+        keys[i].count = 0U;
+        if (raw == 0U)                          /* 按下 */
+        {
+          keys[i].holdMs = 0U;
+          keys[i].longFired = 0U;
+        }
+        else if (keys[i].longFired == 0U)       /* 松手且没触发过长按 -> 短按 */
+        {
+          keys[i].event = KEY_EV_SHORT;
+        }
+        else
+        {
+          /* 长按已触发, 松手不产生事件 */
+        }
+      }
+    }
+    else
+    {
+      keys[i].count = 0U;
+      if (keys[i].stable == 0U)                 /* 按住中: 累计时长判长按 */
+      {
+        if (keys[i].holdMs <= (0xFFFFU - APP_LOOP_PERIOD_MS))
+        {
+          keys[i].holdMs += APP_LOOP_PERIOD_MS;
+        }
+        if ((keys[i].longFired == 0U) && (keys[i].holdMs >= KEY_LONG_MS))
+        {
+          keys[i].longFired = 1U;
+          keys[i].event = KEY_EV_LONG;
+        }
+      }
+    }
+  }
+}
+
+/* 按键事件分发 —— 按键分工:
+ *   待机:      K3 短按 -> 进入恒压 (待机 <-> 恒压 的双向切换键, 题目 1.2)
+ *   恒压运行:  K1/K2 短按 -> 目标 ±1V;  K3 短按 -> 回待机;  K3 长按 -> 切恒流
+ *   恒流运行:  K1/K2 短按 -> 目标 ±0.1A; K3 短按 -> 回待机; K3 长按 -> 切恒压
+ *   过流保护:  K3 短按 -> 解除, 回保护前模式 (输入仍欠压则转欠压保护, 题目 2.1)
+ *   欠压保护:  K3 短按 -> 暂时静音; 输入恢复正常后自动回保护前模式
+ * TODO: K1/K2 长按连发 (快速调节), 后续再加 */
+static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
+{
+  if (ev == KEY_EV_NONE)
+  {
+    return;
+  }
+
+  switch (appState)
+  {
+    case APP_ST_STANDBY:
+      if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
+      {
+        App_SetState(APP_ST_CV);
+      }
+      break;
+
+    case APP_ST_CV:
+      if ((idx == KEY_IDX_UP) && (ev == KEY_EV_SHORT))
+      {
+        targetV = App_Clamp(targetV + VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+      }
+      else if ((idx == KEY_IDX_DOWN) && (ev == KEY_EV_SHORT))
+      {
+        targetV = App_Clamp(targetV - VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+      }
+      else if (idx == KEY_IDX_FUNC)
+      {
+        if (ev == KEY_EV_SHORT)
+        {
+          App_SetState(APP_ST_STANDBY);
+        }
+        else
+        {
+          App_SetState(APP_ST_CC);              /* 长按切恒流 */
+        }
+      }
+      else
+      {
+        /* 其余组合暂不响应 */
+      }
+      break;
+
+    case APP_ST_CC:
+      if ((idx == KEY_IDX_UP) && (ev == KEY_EV_SHORT))
+      {
+        targetI = App_Clamp(targetI + IOUT_STEP, IOUT_TARGET_MIN, IOUT_TARGET_MAX);
+      }
+      else if ((idx == KEY_IDX_DOWN) && (ev == KEY_EV_SHORT))
+      {
+        targetI = App_Clamp(targetI - IOUT_STEP, IOUT_TARGET_MIN, IOUT_TARGET_MAX);
+      }
+      else if (idx == KEY_IDX_FUNC)
+      {
+        if (ev == KEY_EV_SHORT)
+        {
+          App_SetState(APP_ST_STANDBY);
+        }
+        else
+        {
+          App_SetState(APP_ST_CV);              /* 长按切恒压 */
+        }
+      }
+      else
+      {
+        /* 其余组合暂不响应 */
+      }
+      break;
+
+    case APP_ST_PROT_OCP:
+      if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
+      {
+        if (measVin < UVP_TRIP_V)
+        {
+          App_SetState(APP_ST_PROT_UVP);        /* 输入还欠压, 先转欠压保护 */
+        }
+        else
+        {
+          App_SetState(stateBeforeProtect);     /* 手动解除, 恢复正常工作 */
+        }
+      }
+      break;
+
+    case APP_ST_PROT_UVP:
+      if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
+      {
+        buzzerMuted = 1U;                       /* 暂时消音, 恢复逻辑照常 */
+        App_Buzzer(0U);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+/* 状态切换入口: 统一处理"输出通断 / DAC 预置 / 报警 / 屏蔽期"等进入动作 */
+static void App_SetState(AppState_t next)
+{
+  /* 离开运行模式时记下它, 供保护恢复用 */
+  if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
+  {
+    stateBeforeProtect = appState;
+  }
+
+  appState = next;
+
+  switch (next)
+  {
+    case APP_ST_SELF_TEST:
+    case APP_ST_STANDBY:
+      App_OutputEnable(0U);                     /* 待机无输出 (题目 1.1) */
+      App_Buzzer(0U);
+      break;
+
+    case APP_ST_CV:
+      targetV = App_Clamp(targetV, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+      (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 开环预置, 减小合闸过冲 */
+      App_OutputEnable(1U);
+      App_Buzzer(0U);
+      protBlankUntil = HAL_GetTick() + PROT_BLANK_MS;
+      break;
+
+    case APP_ST_CC:
+      /* 恒流模式先保持当前 DAC 值, 让闭环往目标电流靠 (闭环待实现) */
+      App_OutputEnable(1U);
+      App_Buzzer(0U);
+      protBlankUntil = HAL_GetTick() + PROT_BLANK_MS;
+      break;
+
+    case APP_ST_PROT_OCP:
+      App_OutputEnable(0U);                     /* 关输出 */
+      buzzerMuted = 0U;
+      App_Buzzer(1U);                           /* 报警 */
+      break;
+
+    case APP_ST_PROT_UVP:
+      App_OutputEnable(0U);
+      buzzerMuted = 0U;
+      App_Buzzer(1U);
+      break;
+
+    default:
+      break;
+  }
+}
+
+/* 闭环控制: 框架占位, PID 下一版实现.
+ * 恒压: 误差 = targetV - measVout;  恒流: 误差 = targetI - measIout;
+ * 都作用在同一条 DAC 通路上, 注意增益方向为负 (DAC 电压升高 -> 输出降低).
+ * 建议: 每拍限幅小步长, 配合 App_SetState 的开环预置, 避免合闸/恢复过冲 */
+static void App_ControlStep(void)
+{
+  /* TODO: PID 闭环 */
+}
+
+/* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.
+ * 合闸后 PROT_BLANK_MS 内不判保护, 避免浪涌误触发 */
+static void App_ProtectionCheck(void)
+{
+  if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
+  {
+    if ((int32_t)(HAL_GetTick() - protBlankUntil) < 0)
+    {
+      return;                                 /* 屏蔽期内 */
+    }
+    if (measIout > OCP_TRIP_A)
+    {
+      App_SetState(APP_ST_PROT_OCP);
+      return;
+    }
+    if (measVin < UVP_TRIP_V)
+    {
+      App_SetState(APP_ST_PROT_UVP);
+      return;
+    }
+  }
+  else if (appState == APP_ST_PROT_UVP)
+  {
+    if (measVin >= UVP_RECOVER_V)
+    {
+      App_SetState(stateBeforeProtect);       /* 输入恢复 -> 自动回到保护前模式 */
+    }
+  }
+  else
+  {
+    /* 待机 / 过流保护: 不需要自动动作 */
+  }
+}
+
+static char *App_StateText(AppState_t st)
+{
+  switch (st)
+  {
+    case APP_ST_SELF_TEST: return "SELF TEST";
+    case APP_ST_STANDBY:   return "STANDBY";
+    case APP_ST_CV:        return "CV MODE";
+    case APP_ST_CC:        return "CC MODE";
+    case APP_ST_PROT_OCP:  return "OCP ALARM!";
+    case APP_ST_PROT_UVP:  return "UVP ALARM!";
+    default:               return "?";
+  }
+}
+
+/* 屏幕布局 (6×8 字体, 行距 8px):
+ *   y=0  "Power Manager" 固定标题 (题目 1.1)
+ *   y=8  工作状态
+ *   y=16 Vin / y=24 Vout / y=32 Iin / y=40 Iout   四个测量值 (题目 1.7)
+ *   y=48 设定值 (恒压=目标电压, 恒流=目标电流)
+ *   y=56 按键操作提示 */
+static void App_UpdateDisplay(void)
+{
+  char *hint;
+
+  OLED_Clear();
+  OLED_ShowString(0, 0,  "Power Manager", OLED_FONT);
+  OLED_ShowString(0, 8,  App_StateText(appState), OLED_FONT);
+
+  OLED_ShowString(0, 16, "Vin", OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 16, measVin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
+
+  OLED_ShowString(0, 24, "Vout", OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 24, measVout, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 24, 'V', OLED_FONT);
+
+  OLED_ShowString(0, 32, "Iin", OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 32, measIin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 32, 'A', OLED_FONT);
+
+  OLED_ShowString(0, 40, "Iout", OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 40, measIout, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 40, 'A', OLED_FONT);
+
+  OLED_ShowString(0, 48, "Set", OLED_FONT);
+  if (appState == APP_ST_CC)
+  {
+    OLED_ShowFloatNum(OLED_VALUE_X, 48, targetI, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_ShowChar(OLED_UNIT_X, 48, 'A', OLED_FONT);
+  }
+  else
+  {
+    OLED_ShowFloatNum(OLED_VALUE_X, 48, targetV, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_ShowChar(OLED_UNIT_X, 48, 'V', OLED_FONT);
+  }
+
+  switch (appState)
+  {
+    case APP_ST_STANDBY:   hint = "K3=START"; break;
+    case APP_ST_CV:        hint = "K1/K2=ADJ HOLD K3=CC"; break;
+    case APP_ST_CC:        hint = "K1/K2=ADJ HOLD K3=CV"; break;
+    case APP_ST_PROT_OCP:  hint = "K3=CLEAR"; break;
+    case APP_ST_PROT_UVP:  hint = "K3=MUTE AUTO-RECOVER"; break;
+    default:               hint = ""; break;
+  }
+  OLED_ShowString(0, 56, hint, OLED_FONT);
+
+  OLED_Update();
 }
 /* USER CODE END 4 */
 

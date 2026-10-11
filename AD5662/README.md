@@ -33,11 +33,11 @@ AD5662 是**只写**器件，没有 SDO 回读引脚。
 | Data Size | 8 Bits |
 | First Bit | MSB First |
 | Clock Polarity | Low |
-| Clock Phase | 1 Edge |
+| Clock Phase | 2 Edge（CPHA=1） |
 | NSS | Software |
 | Prescaler | 4 → 9 MHz |
 
-CPOL = Low + CPHA = 1 Edge 即 **SPI Mode 1**：SCLK 空闲低，器件在**下降沿**锁存 DIN。这两项选错会整体错位一位，输出直接不对。
+CPOL = Low + CPHA = 1（CubeMX 里选 **2 Edge**，HAL 为 `SPI_PHASE_2EDGE`）即 **SPI Mode 1**：SCLK 空闲低，器件在**下降沿**锁存 DIN，手册"微处理器接口"一章的 68HC11 示例明确要求主机 CPOL=0、CPHA=1。注意 CubeMX 的 "1 Edge" 对应 CPHA=0（Mode 0），不是本器件要的配置；当前 `MX_SPI2_Init()` 生成的还停在 1 Edge，待修正（见工程 README 待办）。
 
 9 MHz 低于 AD5662 在 VDD = 2.7~3.6 V 时的 20 MHz 上限（PCLK1 = 36 MHz，4 分频）。
 

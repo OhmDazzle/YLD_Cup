@@ -4,10 +4,13 @@
 
 ## 当前实现
 
-- 上电：OLED 初始化并显示 V_OUT / V_IN / I_IN / I_OUT 四行标签（6×8 字体），AD5662 初始化后输出 1.23V
-- 主循环（100ms 一轮）：
-  - 采集四路 12 位 ADC（每通道 4 次过采样求均值）：PA6 / PA7 测 V_IN / V_OUT（经分压网络），PB0 / PB1 测 I_OUT / I_IN（分流电阻）
-  - 换算后在 OLED 上局部刷新四行数值，不重画标签、不整屏刷新
+- 上电：输出 MOS 保持关断（无输出），蜂鸣器响 3 声（间隔 0.5s），屏幕显示 "Power Manager" + 状态
+- 主逻辑框架（`Core/Src/main.c` 用户区，可调参数全部集中在文件头部）：
+  - 状态机：待机 / 恒压 / 恒流 / 过流保护 / 欠压保护；闭环 PID 为占位（`App_ControlStep()`），下一版实现
+  - 采样调度：按"电压组 : 电流组"的时隙占比轮流采集——恒压偏电压、恒流偏电流，比例在文件顶部 `CV_VOLT_SLOTS` / `CC_CURR_SLOTS` 等宏自定义
+  - 按键：K1=A8 升、K2=B11 降、K3=B9 功能键（待机↔恒压、长按切恒流/恒压、过流解除、欠压静音）
+  - 保护：Iout>2.3A 关输出+报警（手动解除）；Vin<12.5V 关输出+报警（恢复输入后自动回原模式）
+- 测量链路：四路 12 位 ADC（各 4 次过采样求均值）——PA7 / PA6 测 Vin / Vout（÷7 分压），PB1 / PB0 测 Iin / Iout（5mΩ 分流 + INA199）
 
 ## 硬件平台
 
@@ -25,16 +28,16 @@
 | --- | --- | --- |
 | PA4 | GPIO 开漏输出 | OLED SCL（软件 I2C，驱动运行时自行配置） |
 | PA5 | GPIO 开漏输出 | OLED SDA（软件 I2C） |
-| PA6 | ADC1_IN6 | V_IN 采样（经分压网络） |
-| PA7 | ADC1_IN7 | V_OUT 采样（经分压网络） |
+| PA6 | ADC1_IN6 | V_OUT 采样（分压网络，输出电压÷7） |
+| PA7 | ADC1_IN7 | V_IN 采样（分压网络，输入电压÷7） |
 | PB0 | ADC2_IN8 | I_OUT 采样（经 R7 分流） |
 | PB1 | ADC2_IN9 | I_IN 采样（经 R6 分流） |
 | PB12 | GPIO 输出 | AD5662 SYNC（低有效片选） |
 | PB13 | SPI2_SCK | AD5662 SCLK |
 | PB15 | SPI2_MOSI | AD5662 DIN（PB14 未使用） |
-| PA2 | GPIO 输出 | 三极管控制（预留，未接逻辑） |
-| PB10 | GPIO 输出 | 三极管控制（预留，未接逻辑） |
-| PA8 / PB9 / PB11 | GPIO 输入上拉 | 按键（预留，未接逻辑） |
+| PA2 | GPIO 输出 | 蜂鸣器 MOS 控制（高电平=响） |
+| PB10 | GPIO 输出 | 输出通断 MOS 控制（高电平=导通） |
+| PA8 / PB9 / PB11 | GPIO 输入上拉 | 按键 K1(升) / K3(功能) / K2(降)，按下=低 |
 | PA13 / PA14 | SWD | 调试下载 |
 | PD0 / PD1 | HSE | 8MHz 晶振 |
 
@@ -57,9 +60,12 @@
 | --- | --- | --- |
 | `ADC_SAMPLING_TIME` | 55.5 周期 | ADC 采样时间，信号源内阻大时可调大 |
 | `ADC_OVERSAMPLING` | 4 | 每通道过采样次数（均值滤波） |
-| `V_DIVIDER_RATIO` | 7.0 | V_IN / V_OUT 分压比，待实测确认 |
-| `R_6` / `R_7` | 0.005 Ω | I_IN / I_OUT 分流电阻，以实物为准 |
-| 主循环周期 | 100 ms | `HAL_Delay` 控制刷新节奏 |
+| `CV_VOLT_SLOTS` : `CV_CURR_SLOTS` | 4 : 1 | 恒压模式"电压:电流"采样时隙比 |
+| `CC_VOLT_SLOTS` : `CC_CURR_SLOTS` | 1 : 4 | 恒流模式"电压:电流"采样时隙比 |
+| `*_ADC_SCALE` | 7.0（电压）/ 4.0（电流） | 四通道线性标定 scale（电流暂按 INA199 增益 50 折算） |
+| `VOUT_DAC_A` / `VOUT_DAC_B` | 16.4 / 4.0 | 目标电压 → DAC 电压 的传递关系（待实测修正） |
+| `OCP_TRIP_A` / `UVP_TRIP_V` | 2.3 A / 12.5 V | 过流 / 欠压保护阈值 |
+| 主循环节拍 | 10 ms | `APP_LOOP_PERIOD_MS` |
 
 ## 构建
 
@@ -77,12 +83,12 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 1. **`.ioc` 与代码不完全同步**：SPI2 的 CPOL / CPHA / DataSize / FirstBit / NSS / 分频没有全部存进 `.ioc`，重新生成代码前先看 [AD5662/README.md](AD5662/README.md) 第 2 节，避免 DAC 输出整体错位。
 2. **SPI2 分频两个口径**：AD5662 文档推荐 ÷4（9MHz，保裕量），当前代码是 ÷2（18MHz），都在 AD5662 的 20MHz 上限内；下次重新生成前统一成一个口径。
 3. **PB12（SYNC）上电为低**：到 `AD5662_Init()` 才拉高，目前无害（期间无 SCLK），后续可在 CubeMX 里把初始电平改成 High。
-4. **电流换算待确认**：`I_IN = INA_I_OUT * 4`、`I_OUT = INA_I_OUT * 4`，I_IN 目前取自 I_OUT 的采样值，×4 系数也没有注释，需要对照硬件确认。
-5. **OLED 局部刷新以页为粒度**（8px）：各行 y 保持在页边界（0 / 16 / 32 / 48）；改布局时注意 `OLED_UpdateArea` 会连带刷新同一页的其他内容。
+4. **测量标定**：四通道线性标定系数（offset/scale）集中在 `main.c` 头部 `*_ADC_OFFSET` / `*_ADC_SCALE` 宏；INA199 增益档看丝印（OBG=50 / OBH=100 / OBI=200），实测后把电流 scale 定为 4.0 / 2.0 / 1.0 并标定 offset。
+5. **OLED 布局**：6×8 字体、行距 8px（y=0/8/…/56），当前每 100ms 整屏重绘；若后面改回局部刷新，注意 `OLED_UpdateArea` 以页（8px）为粒度。
 
 ## 待办
 
-- [ ] 分压电阻定值后更新 `V_DIVIDER_RATIO`
-- [ ] 确认电流换算系数，修正 I_IN 取值
-- [ ] 接入按键与三极管控制逻辑
-- [ ] 按题目要求补齐其余功能
+- [ ] 实现闭环 PID（`App_ControlStep()` 占位处）
+- [ ] 用台式表标定四个测量通道（offset/scale），并确认 INA199 增益档位
+- [ ] SPI2 相位改为 2 Edge（CPHA=1，依据 AD5662 手册，见 AD5662/README.md）
+- [ ] 台架实测：开机蜂鸣/待机/恒压切换、保护触发与恢复流程

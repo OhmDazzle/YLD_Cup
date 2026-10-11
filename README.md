@@ -78,6 +78,25 @@ cmake --build --preset Debug  # 编译
 
 CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 
+## 重新生成代码（CubeMX）
+
+本工程的自写代码全部放在 CubeMX 标准用户区块内，重新生成不会丢失：
+
+| 位置 | 内容 | 重新生成时 |
+| --- | --- | --- |
+| `main.c` 的 `USER CODE BEGIN/END` 区块（Includes / PTD / PD / PV / PFP / 2 / 3 / 4） | 全部业务逻辑与可调参数 | 原样保留 |
+| `AD5662/`、`OLED/` 目录 | 自建驱动 | CubeMX 不管理，不受影响 |
+| 顶层 `CMakeLists.txt` | 自加源文件与头文件路径 | 只在首次生成，之后不再重写 |
+| `main.c` 区块之外（`MX_*_Init()`、`SystemClock_Config()` 等）和 `cmake/stm32cubemx/` | CubeMX 生成区 | **会被覆盖重写** |
+
+所以：不要手改生成区（例如 `MX_SPI2_Init()` 里的 CPOL/CPHA）——要改参数请改 `.ioc` 后重新生成，否则下次会被冲掉。重新生成按下面清单走：
+
+1. 先 `git add -A && git commit`，生成后好 diff、好回退。
+2. 按 [AD5662/README.md](AD5662/README.md) 第 2 节把 SPI2 参数在 CubeMX 里重配齐（尤其 CPOL=Low + CPHA=2 Edge），并统一分频口径（÷4 9MHz 或 ÷2 18MHz）。
+3. 顺手把 PB12 初始电平改成 High（见"注意事项"3）。
+4. 生成后重点 diff：`MX_SPI2_Init()` 全部参数、`MX_GPIO_Init()` 的 PA2/PB10/PB12 与按键引脚、外设初始化顺序。
+5. 编译烧录，验证 DAC 输出、OLED、按键与保护流程。
+
 ## 注意事项
 
 1. **`.ioc` 与代码不完全同步**：SPI2 的 CPOL / CPHA / DataSize / FirstBit / NSS / 分频没有全部存进 `.ioc`，重新生成代码前先看 [AD5662/README.md](AD5662/README.md) 第 2 节，避免 DAC 输出整体错位。

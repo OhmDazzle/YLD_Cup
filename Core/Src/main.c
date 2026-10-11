@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "AD5662.h"
+#include "OLED.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,6 +42,20 @@
 #define ADC_OVERSAMPLING     4U
 /* 单次转换的等待超时, 单位 ms */
 #define ADC_TIMEOUT_MS       10U
+/* V_IN / V_OUT 的分压比: 引脚电压需乘该系数还原为实际电压 */
+#define V_DIVIDER_RATIO      7.0f
+/* OLED 全局字体: 6X8, 每字符宽 6px 高 8px(汉字会显示成 ?) */
+#define OLED_FONT            OLED_6X8
+#define OLED_FONT_W          6U
+#define OLED_FONT_H          8U
+/* 数值列起始 x: 名字区最宽 5 字符(V_OUT / I_OUT) = 30px, 再空一个字符 */
+#define OLED_VALUE_X         36U
+#define OLED_FLOAT_INT_LEN   2U
+#define OLED_FLOAT_FRA_LEN   3U
+/* 数值区宽度: (整数位 + 小数位 + 符号 + 小数点) * 字符宽度 */
+#define OLED_VALUE_W         ((OLED_FLOAT_INT_LEN + OLED_FLOAT_FRA_LEN + 2U) * OLED_FONT_W)
+/* 单位字符的 x 坐标: 数值右边空一个字符再写 */
+#define OLED_UNIT_X          (OLED_VALUE_X + OLED_VALUE_W + OLED_FONT_W)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -108,6 +123,20 @@ int main(void)
   MX_ADC2_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
+  /* 初始化 OLED: 软件 I2C, SCL=PA4, SDA=PA5, 内部含清屏 */
+  OLED_Init();
+  /* 标签和单位都是静态的, 只在上电时画一次; 数值在循环里局部刷新 */
+  OLED_ShowString(0, 0,  "V_OUT", OLED_FONT);
+  OLED_ShowString(0, 16, "V_IN",  OLED_FONT);
+  OLED_ShowString(0, 32, "I_IN",  OLED_FONT);
+  OLED_ShowString(0, 48, "I_OUT", OLED_FONT);
+  /* 单位: 电压是 V, 电流是 A */
+  OLED_ShowChar(OLED_UNIT_X, 0,  'V', OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 32, 'A', OLED_FONT);
+  OLED_ShowChar(OLED_UNIT_X, 48, 'A', OLED_FONT);
+  OLED_Update();
+
   /* 初始化 AD5662: 走 SPI2, SYNC 接 PB12, 参考电压 3.3V. 初始化后输出 0V */
   AD5662_Init(&dac, &hspi2, GPIOB, GPIO_PIN_12, 3.3f);
 
@@ -116,11 +145,11 @@ int main(void)
 
   /* 分压电阻阻值(欧姆), 数值待定, 拿到后填在这里. 用 float 而非 int: 电流是浮点
      运算, 整型会在隐式转换时丢精度并触发 -Wconversion */
-  float R_6 = 0.0f;
-  float R_7 = 0.0f;
+  float R_6 = 0.005f;
+  float R_7 = 0.005f;
   float R_5 = 0.0f;
   float R_4 = 0.0f;
-  /* R_5 / R_4 预留给 V_IN / V_OUT 的分压换算, 分压比确定前先显式忽略 */
+  /* V_IN / V_OUT 的分压换算改用 V_DIVIDER_RATIO 常数, R_5 / R_4 暂不参与计算 */
   (void)R_5;
   (void)R_4;
   /* 各引脚测得的电压, 单位 V */
@@ -128,7 +157,10 @@ int main(void)
   float INA_V_IN = 0;
   float INA_I_OUT = 0;
   float INA_V_OUT = 0;
-
+  float I_IN = 0;
+  float I_OUT = 0;
+  float V_IN = 0;
+  float V_OUT = 0;
   /* ADC 校准: 上电后各执行一次, 可消除内部电容误差, 提高转换精度 */
   if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
   {
@@ -151,8 +183,25 @@ int main(void)
        电阻值未填(0)时不做除法: 浮点除零会得到 inf/NaN, 静默污染后续所有 INA 计算 */
     INA_I_OUT = (R_7 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) / R_7) : 0.0f;   /* PB0/R7 */
     INA_I_IN  = (R_6 > 0.0f) ? (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) / R_6) : 0.0f;   /* PB1/R6 */
-    INA_V_OUT = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7);   /* PA7/R5 */
-    INA_V_IN  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6);   /* PA6/R4 */
+    /* V_IN / V_OUT 经分压后接到 ADC, 直接读 ADC 再乘分压比还原为实际电压 */
+    INA_V_OUT = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) * V_DIVIDER_RATIO;   /* PA7/R5 */
+    INA_V_IN  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) * V_DIVIDER_RATIO;   /* PA6/R4 */
+
+    V_OUT= INA_V_OUT;
+    V_IN = INA_V_IN;
+    I_IN = INA_I_OUT * 4;
+    I_OUT = INA_I_OUT *4;
+
+    /* 刷到 OLED: 标签上电时已画好, 这里只刷数值区. 四行的 y 都落在 8px 页边界上,
+       高度正好一个页(8px), 局部刷新不会带掉相邻行的内容 */
+    OLED_ShowFloatNum(OLED_VALUE_X, 0,  V_OUT, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_ShowFloatNum(OLED_VALUE_X, 16, V_IN,  OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_ShowFloatNum(OLED_VALUE_X, 32, I_IN,  OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_ShowFloatNum(OLED_VALUE_X, 48, I_OUT, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+    OLED_UpdateArea(OLED_VALUE_X, 0,  OLED_VALUE_W, OLED_FONT_H);
+    OLED_UpdateArea(OLED_VALUE_X, 16, OLED_VALUE_W, OLED_FONT_H);
+    OLED_UpdateArea(OLED_VALUE_X, 32, OLED_VALUE_W, OLED_FONT_H);
+    OLED_UpdateArea(OLED_VALUE_X, 48, OLED_VALUE_W, OLED_FONT_H);
 
     HAL_Delay(100);
   }

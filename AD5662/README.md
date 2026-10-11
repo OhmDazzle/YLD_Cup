@@ -43,20 +43,20 @@ CPOL = Low + CPHA = 1 Edge 即 **SPI Mode 1**：SCLK 空闲低，器件在**下�
 
 ### ⚠️ 重新生成代码前必读
 
-`YLD_Cup.ioc` 与当前代码**并不同步**：
+`YLD_Cup.ioc` 与当前代码**仍不完全同步**（2026.10.11 核对）：
 
-- `SPI2.IPParameters` 只记录了 `VirtualType,Mode,Direction,CalculateBaudRate`，**`CLKPolarity` / `CLKPhase` / `DataSize` / `FirstBit` / `NSS` / `BaudRatePrescaler` 都没存进去**。
-- `ProjectManager.functionlistsort` 里**没有 `MX_SPI2_Init`**，说明 .ioc 在 SPI2 加进来之后没重新生成过。
-- .ioc 的 `SPI2.Direction=SPI_DIRECTION_2LINES` 与 `PB13/PB15.Mode=TX_Only_Simplex_Unidirect_Master` **自相矛盾**。
+- `SPI2.IPParameters` 只记录了 `VirtualType,Mode,Direction,CalculateBaudRate`，**`CLKPolarity` / `CLKPhase` / `DataSize` / `FirstBit` / `NSS` / `BaudRatePrescaler` 都没存进去**，重新生成时这些项会按 CubeMX 默认值填充。
+- `ProjectManager.functionlistsort` 里**已有 `MX_SPI2_Init`**，重新生成会正常生成并调用它，但生成的参数不保证与上表一致。
+- .ioc 里 `SPI2.Direction=SPI_DIRECTION_2LINES`、`CalculateBaudRate=18.0 MBits/s`（与当前代码的 ÷2 一致），和上表推荐的 Transmit Only / ÷4 不一致；并且 .ioc 的 `SPI2.Direction` 与 `PB13/PB15.Mode=TX_Only_Simplex_Unidirect_Master` 仍**自相矛盾**。
 
-后果：直接在 CubeMX 里点 "Generate Code"，`MX_SPI2_Init()` 会被按 .ioc 覆盖，上面那个表里的参数（尤其是 CPOL/CPHA）可能回到默认值，**输出会整体错位**。
+后果：直接在 CubeMX 里点 "Generate Code" 而不先改配置，`MX_SPI2_Init()` 会被按 .ioc + 默认值重新生成——**CPOL/CPHA 一旦不对，输出会整体错位**。
 
-**做法**：在 CubeMX 里按上表把 SPI2 重配一遍再生成，让 .ioc 成为唯一事实来源。生成后 diff 一下 `MX_SPI2_Init()`，确认 7 项参数都对得上。
+**做法**：在 CubeMX 里按上表把 SPI2 重配一遍再生成，让 .ioc 成为唯一事实来源（Transmit Only / ÷4 9MHz 与当前代码的 2LINES / ÷2 18MHz 二选一，全工程保持一致）。生成后 diff 一下 `MX_SPI2_Init()`，确认参数与选定口径一致。
 
 ### 其他检查项
 
 - **PB12 初始电平建议设为 High**（CubeMX 里 GPIO 配置页的 GPIO output level）。当前 `MX_GPIO_Init()` 生成的是 `RESET`，即上电后到 `AD5662_Init()` 执行前 SYNC 一直处于选中状态。目前无害（这段时间没有 SCLK），但 SYNC 空闲高才是正确状态。注意 `HAL_GPIO_WritePin(...GPIO_PIN_RESET)` 这行在生成区，改用户区会被下次生成冲掉。
-- 不启用 SPI2 时 `HAL_SPI_MODULE_ENABLED` 是注释状态，`Drivers/` 下没有 `stm32f1xx_hal_spi.c/h`，驱动**编译不过**。必须在 CubeMX 里启用并重新生成代码。
+- SPI2 已启用：`HAL_SPI_MODULE_ENABLED` 已打开（`Core/Inc/stm32f1xx_hal_conf.h`），`stm32f1xx_hal_spi.c` 已在编译列表里（`cmake/stm32cubemx/CMakeLists.txt`）。
 
 ### CMakeLists.txt
 

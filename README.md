@@ -45,7 +45,7 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `Core/` | 业务主逻辑（`Core/Src/main.c`）与 HAL 初始化；CubeMX 生成区不要手改 |
+| `Core/` | 业务主逻辑（`Core/Src/main.c`，用法见 [Core/README.md](Core/README.md)）与 HAL 初始化；CubeMX 生成区不要手改 |
 | `Drivers/` | CMSIS 与 STM32F1xx HAL（CubeMX 生成） |
 | `AD5662/` | 16 位 DAC 驱动（SPI2），用法见 [AD5662/README.md](AD5662/README.md) |
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |

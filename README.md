@@ -10,7 +10,7 @@
   - 采样调度：按"电压组 : 电流组"的时隙占比轮流采集——恒压偏电压、恒流偏电流，比例在文件顶部 `CV_VOLT_SLOTS` / `CC_CURR_SLOTS` 等宏自定义
   - 按键：K1=A8 升、K2=B11 降、K3=B9 功能键（待机↔恒压、长按切恒流/恒压、过流解除、欠压静音）
   - 保护：Iout>2.3A 关输出+报警（手动解除）；Vin<12.5V 关输出+报警（恢复输入后自动回原模式）
-- 测量链路：四路 12 位 ADC（各 4 次过采样求均值）——PA7 / PA6 测 Vin / Vout（÷7 分压），PB1 / PB0 测 Iin / Iout（5mΩ 分流 + INA199）
+- 测量链路：四路 12 位 ADC（各 4 次过采样求均值）——PA7 / PA6 测 Vin / Vout（÷7 分压），PB1 / PB0 测 Iin / Iout（采样电阻分流 + INA199，电阻值待实测）
 
 ## 硬件平台
 
@@ -62,7 +62,7 @@
 | `ADC_OVERSAMPLING` | 4 | 每通道过采样次数（均值滤波） |
 | `CV_VOLT_SLOTS` : `CV_CURR_SLOTS` | 4 : 1 | 恒压模式"电压:电流"采样时隙比 |
 | `CC_VOLT_SLOTS` : `CC_CURR_SLOTS` | 1 : 4 | 恒流模式"电压:电流"采样时隙比 |
-| `*_ADC_SCALE` | 7.0（电压）/ 4.0（电流） | 四通道线性标定 scale（电流暂按 INA199 增益 50 折算） |
+| `*_ADC_SCALE` | 电压 7.0；电流自动折算 | 线性标定；电流 scale = 1/(采样电阻 × INA199 增益)，电阻/增益按实物填 `IIN/IOUT_SHUNT_OHM`、`INA199_GAIN` |
 | `VOUT_DAC_A` / `VOUT_DAC_B` | 16.4 / 4.0 | 目标电压 → DAC 电压 的传递关系（待实测修正） |
 | `OCP_TRIP_A` / `UVP_TRIP_V` | 2.3 A / 12.5 V | 过流 / 欠压保护阈值 |
 | 主循环节拍 | 10 ms | `APP_LOOP_PERIOD_MS` |
@@ -102,12 +102,12 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 1. **`.ioc` 与代码不完全同步**：SPI2 的 CPOL / CPHA / DataSize / FirstBit / NSS / 分频没有全部存进 `.ioc`，重新生成代码前先看 [AD5662/README.md](AD5662/README.md) 第 2 节，避免 DAC 输出整体错位。
 2. **SPI2 分频两个口径**：AD5662 文档推荐 ÷4（9MHz，保裕量），当前代码是 ÷2（18MHz），都在 AD5662 的 20MHz 上限内；下次重新生成前统一成一个口径。
 3. **PB12（SYNC）上电为低**：到 `AD5662_Init()` 才拉高，目前无害（期间无 SCLK），后续可在 CubeMX 里把初始电平改成 High。
-4. **测量标定**：四通道线性标定系数（offset/scale）集中在 `main.c` 头部 `*_ADC_OFFSET` / `*_ADC_SCALE` 宏；INA199 增益档看丝印（OBG=50 / OBH=100 / OBI=200），实测后把电流 scale 定为 4.0 / 2.0 / 1.0 并标定 offset。
+4. **测量标定**：四通道线性标定系数（offset/scale）集中在 `main.c` 头部；电流通道单独暴露采样电阻（`IIN/IOUT_SHUNT_OHM`，实物待测）与 INA199 增益（`INA199_GAIN`，丝印 OBG=50 / OBH=100 / OBI=200），改这两个宏后 scale 自动折算。
 5. **OLED 布局**：6×8 字体、行距 8px（y=0/8/…/56），当前每 100ms 整屏重绘；若后面改回局部刷新，注意 `OLED_UpdateArea` 以页（8px）为粒度。
 
 ## 待办
 
 - [ ] 实现闭环 PID（`App_ControlStep()` 占位处）
-- [ ] 用台式表标定四个测量通道（offset/scale），并确认 INA199 增益档位
+- [ ] 用台式表标定四个测量通道（offset/scale），并确认采样电阻阻值与 INA199 增益档位
 - [ ] SPI2 相位改为 2 Edge（CPHA=1，依据 AD5662 手册，见 AD5662/README.md）
 - [ ] 台架实测：开机蜂鸣/待机/恒压切换、保护触发与恢复流程

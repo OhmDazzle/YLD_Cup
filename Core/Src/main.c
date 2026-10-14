@@ -91,16 +91,21 @@ typedef struct
 
 /* ---- 测量通道线性标定: 真值 = (ADC 电压 - offset) × scale ----
  * offset / scale 都按实测标定填; 下面先给理论值, 拿万用表/台式表对比后再修.
- * 电压通道 scale 约等于分压比; 电流通道 scale = 1 / (分流电阻 × INA199 增益),
- *   INA199 增益看芯片丝印: OBG=50 倍 -> scale 4.0; OBH=100 倍 -> 2.0; OBI=200 倍 -> 1.0 */
+ * 电压通道 scale 约等于分压比; 电流通道 scale 由下面的采样链路参数自动折算 */
 #define VIN_ADC_OFFSET       0.0f
 #define VIN_ADC_SCALE        7.0f    /* PA7 = INA_V_IN  (输入电压 ÷7 后进 ADC) */
 #define VOUT_ADC_OFFSET      0.0f
 #define VOUT_ADC_SCALE       7.0f    /* PA6 = INA_V_OUT (输出电压 ÷7 后进 ADC) */
 #define IIN_ADC_OFFSET       0.0f
-#define IIN_ADC_SCALE        4.0f    /* PB1 = 输入电流 (5mΩ 分流, INA199 暂按 50 倍) */
 #define IOUT_ADC_OFFSET      0.0f
-#define IOUT_ADC_SCALE       4.0f    /* PB0 = 输出电流 (5mΩ 分流, INA199 暂按 50 倍) */
+
+/* ---- 电流采样链路参数 (实物未定, 拿到后只改这一小段) ----
+ * 电流 = (ADC 电压 - offset) × scale,  其中 scale = 1 / (采样电阻 × INA199 增益) */
+#define IIN_SHUNT_OHM        0.005f  /* 输入电流采样电阻 R6, 单位 Ω (占位值, 待实测替换) */
+#define IOUT_SHUNT_OHM       0.005f  /* 输出电流采样电阻 R7, 单位 Ω (占位值, 待实测替换) */
+#define INA199_GAIN          50.0f   /* INA199 增益, 看丝印: OBG=50 (OBH=100 / OBI=200) */
+#define IIN_ADC_SCALE        (1.0f / (IIN_SHUNT_OHM  * INA199_GAIN))  /* PB1 = 输入电流 */
+#define IOUT_ADC_SCALE       (1.0f / (IOUT_SHUNT_OHM * INA199_GAIN))  /* PB0 = 输出电流 */
 
 /* ---- DAC -> 输出电压传递关系 (理论值 Vout ≈ A - B × V_DAC, 实测后修正) ----
  * 由注入网络 R10=10k / R1=2.5k / R11=1.2k 推得: Vout ≈ 16.4 - 4 × V_DAC */

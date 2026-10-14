@@ -35,8 +35,12 @@
 | 宏 | 当前值 | 说明 |
 | --- | --- | --- |
 | `VIN_ADC_SCALE` / `VOUT_ADC_SCALE` | 7.0 | 分压比（输入/输出电压 ÷7 进 ADC），实测后微调 |
-| `IIN_ADC_SCALE` / `IOUT_ADC_SCALE` | 4.0 | 1/(5mΩ × INA199 增益)；增益看丝印：OBG=50→4.0、OBH=100→2.0、OBI=200→1.0 |
+| `IIN_SHUNT_OHM` / `IOUT_SHUNT_OHM` | 0.005（占位） | 输入（R6）/ 输出（R7）电流采样电阻，实测后只改这里 |
+| `INA199_GAIN` | 50.0 | INA199 增益，看丝印：OBG=50 / OBH=100 / OBI=200 |
+| `IIN_ADC_SCALE` / `IOUT_ADC_SCALE` | 自动折算 | = 1 / (采样电阻 × 增益)，改上面两个宏即可，不用手算 |
 | 四个 `*_ADC_OFFSET` | 0.0 | 零点偏置：输出关断时读到的值直接填进来 |
+
+采样电阻与增益未最终确定前，先按 0.005Ω × 50 倍占位（等效 scale = 4.0）；实物定值后只需替换 `IIN/IOUT_SHUNT_OHM` 与 `INA199_GAIN`。
 
 标定流程：① 待机（输出关断）读原始读数 → 填 `offset`；② 带载后与台式表对比两三个点，按比例修 `scale`。
 

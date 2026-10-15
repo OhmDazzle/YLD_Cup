@@ -178,7 +178,6 @@ static AD5662_t dac;
 static AppState_t appState = APP_ST_SELF_TEST;
 static AppState_t stateBeforeProtect = APP_ST_CV;  /* 保护前的运行模式, 恢复用 */
 static uint32_t   protBlankUntil = 0U;             /* 合闸屏蔽期截止时刻 */
-static uint8_t    buzzerMuted = 0U;                /* 欠压保护下按 K3 暂时静音 */
 
 /* ---- 设定值 ---- */
 static float targetV = VOUT_TARGET_DEFAULT;
@@ -879,8 +878,7 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
     case APP_ST_PROT_UVP:
       if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
       {
-        buzzerMuted = 1U;                       /* 暂时消音, 恢复逻辑照常 */
-        App_Buzzer(0U);
+        App_Buzzer(0U);                         /* 暂时消音, 恢复逻辑照常 */
       }
       break;
 
@@ -925,13 +923,11 @@ static void App_SetState(AppState_t next)
 
     case APP_ST_PROT_OCP:
       App_OutputEnable(0U);                     /* 关输出 */
-      buzzerMuted = 0U;
       App_Buzzer(1U);                           /* 报警 */
       break;
 
     case APP_ST_PROT_UVP:
       App_OutputEnable(0U);
-      buzzerMuted = 0U;
       App_Buzzer(1U);
       break;
 

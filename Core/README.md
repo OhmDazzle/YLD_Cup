@@ -52,7 +52,7 @@
 | --- | --- | --- |
 | `VOUT_TARGET_DEFAULT / MIN / MAX / VOUT_STEP` | 8 / 5 / 15 / 1.0 | 步进调压默认值与范围（题目 2.2） |
 | `IOUT_TARGET_* / IOUT_STEP` | 1 / 0.2 / 2 / 0.1 | 恒流模式设定与步进 |
-| `OCP_TRIP_A` / `UVP_TRIP_V` / `UVP_RECOVER_V` | 2.3 / 12.5 / 13.0 | 过流、欠压阈值与恢复迟滞 |
+| `OCP_TRIP_A` / `OCP_CONFIRM_MS` / `UVP_TRIP_V` / `UVP_RECOVER_V` | 2.3 / 50 / 12.5 / 13.0 | 过流阈值、过流确认窗口 (ms)、欠压阈值与恢复迟滞 |
 | `PROT_BLANK_MS` | 300 | 合闸后的保护屏蔽期（防浪涌误触发） |
 | `APP_LOOP_PERIOD_MS` / `DISPLAY_REFRESH_MS` | 10 / 100 ms | 主循环节拍 / 屏幕刷新周期 |
 | `KEY_DEBOUNCE_MS` / `KEY_LONG_MS` | 20 / 800 ms | 按键消抖 / 长按判定 |

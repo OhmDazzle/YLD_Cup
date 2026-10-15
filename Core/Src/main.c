@@ -125,6 +125,7 @@ typedef struct
 
 /* ---- 保护阈值 (题目 2.1) ---- */
 #define OCP_TRIP_A           2.3f    /* Iout 超过 -> 过流保护 (手动解除) */
+#define OCP_CONFIRM_MS       50U     /* 过流需"持续"该时长才锁存保护, 防负载瞬变误触发 */
 #define UVP_TRIP_V           12.5f   /* Vin 低于 -> 欠压保护 (自动恢复) */
 #define UVP_RECOVER_V        13.0f   /* Vin 回升到该值 -> 自动恢复 (留迟滞) */
 #define PROT_BLANK_MS        300U    /* 合闸后的保护屏蔽时间, 防浪涌误触发 */
@@ -178,6 +179,9 @@ static AD5662_t dac;
 static AppState_t appState = APP_ST_SELF_TEST;
 static AppState_t stateBeforeProtect = APP_ST_CV;  /* 保护前的运行模式, 恢复用 */
 static uint32_t   protBlankUntil = 0U;             /* 合闸屏蔽期截止时刻 */
+static uint8_t    ioutFresh = 0U;                  /* 有新的电流采样 (供过流确认窗口消费) */
+static uint8_t    ocpTracking = 0U;                /* 正在累计过流持续时间 */
+static uint32_t   ocpSince = 0U;                   /* 本轮连续过流的起始时刻 */
 
 /* ---- 设定值 ---- */
 static float targetV = VOUT_TARGET_DEFAULT;
@@ -693,6 +697,7 @@ static void App_SampleCurrentGroup(void)
 {
   measIin  = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) - IIN_ADC_OFFSET)  * IIN_ADC_SCALE;  /* PB1 */
   measIout = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) - IOUT_ADC_OFFSET) * IOUT_ADC_SCALE; /* PB0 */
+  ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
 }
 
 /* 采样调度器: 每个循环拍消费一个"时隙".
@@ -898,6 +903,13 @@ static void App_SetState(AppState_t next)
 
   appState = next;
 
+  /* 进入运行模式: 过流确认窗口重新起算, 清掉上一段的残留 */
+  if ((next == APP_ST_CV) || (next == APP_ST_CC))
+  {
+    ioutFresh = 0U;
+    ocpTracking = 0U;
+  }
+
   switch (next)
   {
     case APP_ST_SELF_TEST:
@@ -946,7 +958,8 @@ static void App_ControlStep(void)
 }
 
 /* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.
- * 合闸后 PROT_BLANK_MS 内不判保护, 避免浪涌误触发 */
+ * 合闸后 PROT_BLANK_MS 内不判保护, 避免浪涌误触发;
+ * 过流只在新样本上判定, 需持续 OCP_CONFIRM_MS 才锁存, 负载瞬变/尖峰不会误触发 */
 static void App_ProtectionCheck(void)
 {
   if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
@@ -955,11 +968,30 @@ static void App_ProtectionCheck(void)
     {
       return;                                 /* 屏蔽期内 */
     }
-    if (measIout > OCP_TRIP_A)
+
+    /* 过流确认: 任一"正常"的新样本立即清零累计, 只认持续过流 */
+    if (ioutFresh != 0U)
     {
-      App_SetState(APP_ST_PROT_OCP);
-      return;
+      ioutFresh = 0U;
+      if (measIout > OCP_TRIP_A)
+      {
+        if (ocpTracking == 0U)
+        {
+          ocpTracking = 1U;
+          ocpSince = HAL_GetTick();
+        }
+        else if ((uint32_t)(HAL_GetTick() - ocpSince) >= OCP_CONFIRM_MS)
+        {
+          App_SetState(APP_ST_PROT_OCP);
+          return;
+        }
+      }
+      else
+      {
+        ocpTracking = 0U;
+      }
     }
+
     if (measVin < UVP_TRIP_V)
     {
       App_SetState(APP_ST_PROT_UVP);

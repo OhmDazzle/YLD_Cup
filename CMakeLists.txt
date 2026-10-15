@@ -57,6 +57,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED/OLED.c
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED/OLED_Data.c
     ${CMAKE_CURRENT_SOURCE_DIR}/AD5662/AD5662.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/TEST/test_calib.c
 )
 
 # Add include paths
@@ -64,6 +65,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED
     ${CMAKE_CURRENT_SOURCE_DIR}/AD5662
+    ${CMAKE_CURRENT_SOURCE_DIR}/TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy

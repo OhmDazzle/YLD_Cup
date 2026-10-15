@@ -57,7 +57,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED/OLED.c
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED/OLED_Data.c
     ${CMAKE_CURRENT_SOURCE_DIR}/AD5662/AD5662.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/TEST/test_calib.c
 )
 
 # Add include paths
@@ -65,7 +64,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED
     ${CMAKE_CURRENT_SOURCE_DIR}/AD5662
-    ${CMAKE_CURRENT_SOURCE_DIR}/TEST
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy
@@ -87,3 +85,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+
+# ---- 独立标定固件 (TEST/): 单独编译、单独烧录, 不影响主固件 ----
+#   构建: cmake --build --preset Debug --target YLD_Cup_Calib
+#   CLion: 复制一份运行配置, Target 选 YLD_Cup_Calib
+add_subdirectory(TEST)

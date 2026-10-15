@@ -49,7 +49,7 @@
 | `Drivers/` | CMSIS 与 STM32F1xx HAL（CubeMX 生成） |
 | `AD5662/` | 16 位 DAC 驱动（SPI2），用法见 [AD5662/README.md](AD5662/README.md) |
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |
-| `TEST/` | 采样标定模式（实测采样电阻 / 分压系数用），用法见 [TEST/README.md](TEST/README.md) |
+| `TEST/` | 独立采样标定固件（单独编译/烧录，实测采样电阻与分压系数），用法见 [TEST/README.md](TEST/README.md) |
 | `cmake/` | arm-none-eabi-gcc 工具链文件与 CubeMX 源文件清单 |
 | `YLD_Cup.ioc` | CubeMX 工程文件（与代码存在差异，见"注意事项"） |
 
@@ -86,7 +86,7 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 | 位置 | 内容 | 重新生成时 |
 | --- | --- | --- |
 | `main.c` 的 `USER CODE BEGIN/END` 区块（Includes / PTD / PD / PV / PFP / 2 / 3 / 4） | 全部业务逻辑与可调参数 | 原样保留 |
-| `AD5662/`、`OLED/`、`TEST/` 目录 | 自建驱动 / 标定工具 | CubeMX 不管理，不受影响 |
+| `AD5662/`、`OLED/`、`TEST/` 目录 | 自建驱动 / 独立标定固件 | CubeMX 不管理，不受影响 |
 | 顶层 `CMakeLists.txt` | 自加源文件与头文件路径 | 只在首次生成，之后不再重写 |
 | `main.c` 区块之外（`MX_*_Init()`、`SystemClock_Config()` 等）和 `cmake/stm32cubemx/` | CubeMX 生成区 | **会被覆盖重写** |
 

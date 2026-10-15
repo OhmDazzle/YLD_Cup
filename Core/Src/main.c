@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include "AD5662.h"
 #include "OLED.h"
-#include "test_calib.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -152,13 +151,6 @@ typedef struct
 #define OLED_FLOAT_FRA_LEN   2U
 /* 单位列 x: 数值最宽 "+15.00" 6 字符 = 36px, 后留 6px */
 #define OLED_UNIT_X          78U
-
-/* ---- 采样标定模式 (TEST 文件夹) ----
- * 0 = 正常运行; 1 = 上电强制进入标定界面 (说明见 TEST/README.md).
- * 正常固件下也可在上电时按住 K3(B9) 临时进入, 断电重启退出 */
-#ifndef TEST_CALIB_MODE
-#define TEST_CALIB_MODE      0
-#endif
 
 /* USER CODE END PD */
 
@@ -298,18 +290,6 @@ int main(void)
   {
     Error_Handler();
   }
-
-#if TEST_CALIB_MODE
-  /* ---- 强制进入采样标定模式 (TEST/), 不返回; 测完把 TEST_CALIB_MODE 改回 0 ---- */
-  TestCalib_Run(&hadc1, &hadc2, &dac);
-#else
-  /* 上电按住 K3(B9) 临时进入标定模式 (免重新编译), 否则继续正常流程 */
-  if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_RESET)
-  {
-    TestCalib_Run(&hadc1, &hadc2, &dac);
-  }
-#endif
-
   /* 先各采一组, 让显示与保护逻辑一上来就有有效数据 */
   App_SampleVoltageGroup();
   App_SampleCurrentGroup();

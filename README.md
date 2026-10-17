@@ -50,7 +50,7 @@
 | `AD5662/` | 16 位 DAC 驱动（SPI2），用法见 [AD5662/README.md](AD5662/README.md) |
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |
 | `TEST/` | 独立采样标定固件（单独编译/烧录，实测采样电阻与分压系数），用法见 [TEST/README.md](TEST/README.md) |
-| `TEST_OLED/` | 独立 OLED 测试固件（单独编译/烧录，六页图形/文字/动画自检），用法见 [TEST_OLED/README.md](TEST_OLED/README.md) |
+| `TEST_OLED/` | 独立 OLED 测试固件（单独编译/烧录，六页图形/文字/动画自检，K3 长按控制蜂鸣器），用法见 [TEST_OLED/README.md](TEST_OLED/README.md) |
 | `cmake/` | arm-none-eabi-gcc 工具链文件与 CubeMX 源文件清单 |
 | `YLD_Cup.ioc` | CubeMX 工程文件（与代码存在差异，见"注意事项"） |
 

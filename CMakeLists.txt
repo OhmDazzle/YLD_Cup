@@ -90,3 +90,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 #   构建: cmake --build --preset Debug --target YLD_Cup_Calib
 #   CLion: 复制一份运行配置, Target 选 YLD_Cup_Calib
 add_subdirectory(TEST)
+add_subdirectory(TEST_OLED)

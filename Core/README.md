@@ -55,6 +55,7 @@
 | `OCP_TRIP_A` / `OCP_CONFIRM_MS` / `UVP_TRIP_V` / `UVP_RECOVER_V` | 2.3 / 50 / 12.5 / 13.0 | 过流阈值、过流确认窗口 (ms)、欠压阈值与恢复迟滞 |
 | `PROT_BLANK_MS` | 300 | 合闸后的保护屏蔽期（防浪涌误触发） |
 | `APP_LOOP_PERIOD_MS` / `DISPLAY_REFRESH_MS` | 10 / 100 ms | 主循环节拍 / 屏幕刷新周期 |
+| `DISPLAY_AVG_TICKS` | 3 | 显示滑动平均窗口（3 × 100 ms = 300 ms，仅影响屏幕，保护用实时值） |
 | `KEY_DEBOUNCE_MS` / `KEY_LONG_MS` | 20 / 800 ms | 按键消抖 / 长按判定 |
 | `BEEP_ON_MS / BEEP_GAP_MS / BEEP_STARTUP_TIMES` | 200 / 500 / 3 | 开机蜂鸣节奏 |
 | `VOUT_DAC_A / VOUT_DAC_B` | 16.4 / 4.0 | 目标电压 → DAC 传递关系（理论值；方向：DAC↑ → Vout↓） |
@@ -81,3 +82,4 @@
 4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单；SPI2 参数见 [AD5662/README.md](../AD5662/README.md) 第 2 节）。
 5. 屏幕数值用驱动自带的 `OLED_ShowFloatNum`，固定带 `+` 号；在意排版再自行格式化。
 6. 待机/自检/保护状态下屏幕的 Vout 强制显示 0.00V：Vout 采样点在输出 MOS 内侧，变换器储能电压（约 8~10V）不代表输出端电压（实际输出端为 0V）。运行状态（CV/CC）显示真实测量值，后续 PID 也只在运行状态使用 `measVout`。
+7. 屏幕四个测量值取最近 `DISPLAY_AVG_TICKS` 次刷新（默认 300 ms）的滑动平均，仅影响显示；过流/欠压保护仍使用未平滑的实时测量值。状态切换时平均窗口会重置，避免把上一状态的读数带进新状态。

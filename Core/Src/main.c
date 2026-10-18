@@ -134,6 +134,7 @@ typedef struct
 /* ---- 时序 ---- */
 #define APP_LOOP_PERIOD_MS   10U     /* 主循环节拍 */
 #define DISPLAY_REFRESH_MS   100U    /* 屏幕刷新周期 */
+#define DISPLAY_AVG_TICKS    3U      /* 显示平均窗口: 最近 3 次刷新 (约 300ms) */
 #define KEY_DEBOUNCE_MS      20U     /* 按键消抖时间 */
 #define KEY_LONG_MS          800U    /* 长按判定时间 */
 #define BEEP_ON_MS           200U    /* 开机蜂鸣: 每声时长 */
@@ -204,6 +205,10 @@ static Key_t keys[3] =
 
 /* ---- 循环节拍 ---- */
 static uint32_t lastDisplayTick = 0U;
+/* ---- 显示平滑窗口 (行: Vin / Vout / Iin / Iout) ---- */
+static float   dispHist[4][DISPLAY_AVG_TICKS];
+static uint8_t dispHistIdx = 0U;
+static uint8_t dispHistFilled = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -228,6 +233,7 @@ static void  App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev);
 static void  App_ControlStep(void);
 static void  App_ProtectionCheck(void);
 static void  App_UpdateDisplay(void);
+static void  App_DisplayAverage(float *vin, float *vout, float *iin, float *iout);
 static float App_TargetToDac(float vout);
 static float App_Clamp(float v, float lo, float hi);
 static char *App_StateText(AppState_t st);
@@ -912,6 +918,10 @@ static void App_SetState(AppState_t next)
 
   appState = next;
 
+  /* 状态切换后显示平均窗口重新起算, 避免上一状态的读数混进新状态 */
+  dispHistFilled = 0U;
+  dispHistIdx = 0U;
+
   /* 进入运行模式: 过流确认窗口重新起算, 清掉上一段的残留 */
   if ((next == APP_ST_CV) || (next == APP_ST_CC))
   {
@@ -1034,6 +1044,61 @@ static char *App_StateText(AppState_t st)
   }
 }
 
+/* 显示平滑: 把当前测量值压入窗口, 返回最近 DISPLAY_AVG_TICKS 次的平均.
+ * 仅用于屏幕显示; 保护判断仍用实时 meas* 值, 不增加保护延迟.
+ * 首次调用/状态切换后用当前值填满窗口, 避免从 0 或旧值慢慢爬升. */
+static void App_DisplayAverage(float *vin, float *vout, float *iin, float *iout)
+{
+  float vals[4];
+  float sum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  uint8_t ch;
+  uint8_t k;
+
+  vals[0] = measVin;
+  vals[1] = measVout;
+  vals[2] = measIin;
+  vals[3] = measIout;
+
+  if (dispHistFilled == 0U)
+  {
+    for (ch = 0U; ch < 4U; ch++)
+    {
+      for (k = 0U; k < DISPLAY_AVG_TICKS; k++)
+      {
+        dispHist[ch][k] = vals[ch];
+      }
+    }
+    dispHistFilled = DISPLAY_AVG_TICKS;
+    dispHistIdx = 0U;
+  }
+  else
+  {
+    for (ch = 0U; ch < 4U; ch++)
+    {
+      dispHist[ch][dispHistIdx] = vals[ch];
+    }
+    dispHistIdx = (uint8_t)((dispHistIdx + 1U) % DISPLAY_AVG_TICKS);
+    if (dispHistFilled < DISPLAY_AVG_TICKS)
+    {
+      dispHistFilled++;
+    }
+  }
+
+  for (ch = 0U; ch < 4U; ch++)
+  {
+    for (k = 0U; k < dispHistFilled; k++)
+    {
+      sum[ch] += dispHist[ch][k];
+    }
+    sum[ch] /= (float)dispHistFilled;
+  }
+
+  *vin  = sum[0];
+  *vout = sum[1];
+  *iin  = sum[2];
+  *iout = sum[3];
+}
+
 /* 屏幕布局 (6×8 字体, 行距 8px):
  *   y=0  "Power Manager" 固定标题 (题目 1.1)
  *   y=8  工作状态
@@ -1044,29 +1109,36 @@ static void App_UpdateDisplay(void)
 {
   char *hint;
   float voutDisp;
+  float dispVin;
+  float dispVout;
+  float dispIin;
+  float dispIout;
+
+  /* 显示平滑: 取最近 DISPLAY_AVG_TICKS 次刷新的平均, 抑制末位跳动 */
+  App_DisplayAverage(&dispVin, &dispVout, &dispIin, &dispIout);
 
   OLED_Clear();
   OLED_ShowString(0, 0,  "Power Manager", OLED_FONT);
   OLED_ShowString(0, 8,  App_StateText(appState), OLED_FONT);
 
   OLED_ShowString(0, 16, "Vin", OLED_FONT);
-  OLED_ShowFloatNum(OLED_VALUE_X, 16, measVin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 16, dispVin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
 
   /* Vout 采样点在输出通断 MOS 内侧: 待机/保护时 MOS 断开, 输出端实际为 0V,
      但变换器仍在工作, 采样点读到的是储能电压(约 8~10V).
      非运行状态强制显示 0.00V, 避免"输出 0V 却显示 10V"的误判. */
-  voutDisp = ((appState == APP_ST_CV) || (appState == APP_ST_CC)) ? measVout : 0.0f;
+  voutDisp = ((appState == APP_ST_CV) || (appState == APP_ST_CC)) ? dispVout : 0.0f;
   OLED_ShowString(0, 24, "Vout", OLED_FONT);
   OLED_ShowFloatNum(OLED_VALUE_X, 24, voutDisp, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 24, 'V', OLED_FONT);
 
   OLED_ShowString(0, 32, "Iin", OLED_FONT);
-  OLED_ShowFloatNum(OLED_VALUE_X, 32, measIin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 32, dispIin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 32, 'A', OLED_FONT);
 
   OLED_ShowString(0, 40, "Iout", OLED_FONT);
-  OLED_ShowFloatNum(OLED_VALUE_X, 40, measIout, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 40, dispIout, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 40, 'A', OLED_FONT);
 
   OLED_ShowString(0, 48, "Set", OLED_FONT);

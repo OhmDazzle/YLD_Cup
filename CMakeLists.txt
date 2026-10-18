@@ -91,3 +91,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 #   CLion: 复制一份运行配置, Target 选 YLD_Cup_Calib
 add_subdirectory(TEST)
 add_subdirectory(TEST_OLED)
+add_subdirectory(TEST_AD5662)

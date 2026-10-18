@@ -51,6 +51,7 @@
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |
 | `TEST/` | 独立采样标定固件（单独编译/烧录，实测采样电阻与分压系数），用法见 [TEST/README.md](TEST/README.md) |
 | `TEST_OLED/` | 独立 OLED 测试固件（单独编译/烧录，六页图形/文字/动画自检，K3 长按控制蜂鸣器），用法见 [TEST_OLED/README.md](TEST_OLED/README.md) |
+| `TEST_AD5662/` | 独立 AD5662 测试固件（单独编译/烧录，手动调压、阶梯、极值与掉电模式），用法见 [TEST_AD5662/README.md](TEST_AD5662/README.md) |
 | `cmake/` | arm-none-eabi-gcc 工具链文件与 CubeMX 源文件清单 |
 | `YLD_Cup.ioc` | CubeMX 工程文件（与代码存在差异，见"注意事项"） |
 
@@ -80,6 +81,9 @@ cmake --build --preset Debug  # 编译
 
 # 只编译独立 OLED 测试固件
 cmake --build --preset Debug --target YLD_Cup_OLEDTest
+
+# 只编译独立 AD5662 测试固件
+cmake --build --preset Debug --target YLD_Cup_AD5662Test
 ```
 
 CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。

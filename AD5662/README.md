@@ -4,6 +4,7 @@ STM32F103 + AD5662（16 位 nanoDAC，3 线 SPI）驱动，V_Ref = 3.3V。
 
 - `AD5662.h` — 类型、宏、函数声明
 - `AD5662.c` — 实现
+- 独立硬件测试固件见 [TEST_AD5662/README.md](../TEST_AD5662/README.md)
 
 ---
 

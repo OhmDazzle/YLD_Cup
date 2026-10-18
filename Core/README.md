@@ -80,3 +80,4 @@
 3. 显示是整屏重绘（100 ms 一次）；以后若要改回局部刷新，注意 `OLED_UpdateArea()` 以页（8px）为粒度。
 4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单；SPI2 参数见 [AD5662/README.md](../AD5662/README.md) 第 2 节）。
 5. 屏幕数值用驱动自带的 `OLED_ShowFloatNum`，固定带 `+` 号；在意排版再自行格式化。
+6. 待机/自检/保护状态下屏幕的 Vout 强制显示 0.00V：Vout 采样点在输出 MOS 内侧，变换器储能电压（约 8~10V）不代表输出端电压（实际输出端为 0V）。运行状态（CV/CC）显示真实测量值，后续 PID 也只在运行状态使用 `measVout`。

@@ -1034,6 +1034,7 @@ static char *App_StateText(AppState_t st)
 static void App_UpdateDisplay(void)
 {
   char *hint;
+  float voutDisp;
 
   OLED_Clear();
   OLED_ShowString(0, 0,  "Power Manager", OLED_FONT);
@@ -1043,8 +1044,12 @@ static void App_UpdateDisplay(void)
   OLED_ShowFloatNum(OLED_VALUE_X, 16, measVin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
 
+  /* Vout 采样点在输出通断 MOS 内侧: 待机/保护时 MOS 断开, 输出端实际为 0V,
+     但变换器仍在工作, 采样点读到的是储能电压(约 8~10V).
+     非运行状态强制显示 0.00V, 避免"输出 0V 却显示 10V"的误判. */
+  voutDisp = ((appState == APP_ST_CV) || (appState == APP_ST_CC)) ? measVout : 0.0f;
   OLED_ShowString(0, 24, "Vout", OLED_FONT);
-  OLED_ShowFloatNum(OLED_VALUE_X, 24, measVout, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
+  OLED_ShowFloatNum(OLED_VALUE_X, 24, voutDisp, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 24, 'V', OLED_FONT);
 
   OLED_ShowString(0, 32, "Iin", OLED_FONT);

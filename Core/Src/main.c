@@ -830,10 +830,12 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
       if ((idx == KEY_IDX_UP) && (ev == KEY_EV_SHORT))
       {
         targetV = App_Clamp(targetV + VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+        (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
       }
       else if ((idx == KEY_IDX_DOWN) && (ev == KEY_EV_SHORT))
       {
         targetV = App_Clamp(targetV - VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+        (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
       }
       else if (idx == KEY_IDX_FUNC)
       {

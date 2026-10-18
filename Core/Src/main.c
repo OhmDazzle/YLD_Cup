@@ -73,8 +73,9 @@ typedef struct
 #define ADC_VREF             3.3f
 /* 12 位 ADC 满量程值 */
 #define ADC_FULL_SCALE       4095.0f
-/* 每个通道的采样时间, 信号源内阻较大时可改为 ADC_SAMPLETIME_239CYCLES_5 */
-#define ADC_SAMPLING_TIME    ADC_SAMPLETIME_55CYCLES_5
+/* 每个通道的采样时间. 本板电压通道是 10MΩ 级高阻分压, 必须用最长采样时间让
+   采样保持电容充分建立, 否则会出现大幅初始偏移/通道间串扰 */
+#define ADC_SAMPLING_TIME    ADC_SAMPLETIME_239CYCLES_5
 /* 每个通道的过采样次数, 用于简单均值滤波 */
 #define ADC_OVERSAMPLING     4U
 /* 单次转换的等待超时, 单位 ms */
@@ -300,6 +301,10 @@ int main(void)
 
   /* 开机蜂鸣 3 声, 每次间隔约 0.5s (题目 1.1), 之后进入待机 */
   App_PlayStartupBeeps();
+  /* 蜂鸣期间输入/负载可能还在建立(上电涌流), 屏上是 2 秒多前的旧值;
+     进待机前重新采一轮并刷新, 避免初始画面停留在建立过程中的读数 */
+  App_SampleVoltageGroup();
+  App_SampleCurrentGroup();
   App_SetState(APP_ST_STANDBY);
   App_UpdateDisplay();
   /* USER CODE END 2 */
@@ -612,8 +617,9 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
     return 0.0f;
   }
 
-  /* 软件启动转换, 多次采样求平均以抑制噪声 */
-  for (i = 0U; i < ADC_OVERSAMPLING; i++)
+  /* 通道刚切换后的第一次转换会受采样保持电容残留电荷影响, 丢弃;
+     之后再做 ADC_OVERSAMPLING 次求平均. 高阻分压下这一条对消除串扰很关键 */
+  for (i = 0U; i < (ADC_OVERSAMPLING + 1U); i++)
   {
     if (HAL_ADC_Start(hadc) != HAL_OK)
     {
@@ -625,7 +631,10 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
       HAL_ADC_Stop(hadc);
       return 0.0f;
     }
-    sum += HAL_ADC_GetValue(hadc);
+    if (i > 0U)                    /* 丢弃通道切换后的第一个样本 */
+    {
+      sum += HAL_ADC_GetValue(hadc);
+    }
   }
 
   HAL_ADC_Stop(hadc);

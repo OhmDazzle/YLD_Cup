@@ -76,7 +76,7 @@
 ## 5. 注意事项
 
 1. `App_ControlStep()` 目前是占位——CV/CC 靠开环预置，不会精确闭环，属预期；接线与标定完成后再填 PID。
-2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道并做 4 次均值转换（约百微秒级），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
+2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道，丢弃切换后的第一个样本，再做 4 次均值转换（239.5 周期采样，单通道约 0.2 ms），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
 3. 显示是整屏重绘（100 ms 一次）；以后若要改回局部刷新，注意 `OLED_UpdateArea()` 以页（8px）为粒度。
 4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单；SPI2 参数见 [AD5662/README.md](../AD5662/README.md) 第 2 节）。
 5. 屏幕数值用驱动自带的 `OLED_ShowFloatNum`，固定带 `+` 号；在意排版再自行格式化。

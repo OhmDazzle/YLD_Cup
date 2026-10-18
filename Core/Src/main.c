@@ -90,18 +90,15 @@ typedef struct
 #define CC_VOLT_SLOTS        1U    /* 恒流模式: 电压组时隙数 */
 #define CC_CURR_SLOTS        4U    /* 恒流模式: 电流组时隙数 */
 
-/* ---- 测量通道线性标定: 真值 = (ADC 电压 - offset) × scale ----
- * offset / scale 都按实测标定填; 下面先给理论值, 拿万用表/台式表对比后再修.
+/* ---- 测量通道线性标定: 真值 = ADC 引脚电压 × scale ----
+ * 只按比例系数换算, 不再使用零点/初始引脚电压作为基准;
+ * 下面先给理论值, 拿万用表/台式表对比后再修 scale.
  * 电压通道 scale 约等于分压比; 电流通道 scale 由下面的采样链路参数自动折算 */
-#define VIN_ADC_OFFSET       0.0f
 #define VIN_ADC_SCALE        7.0f    /* PA7 = INA_V_IN  (输入电压 ÷7 后进 ADC) */
-#define VOUT_ADC_OFFSET      0.0f
 #define VOUT_ADC_SCALE       7.0f    /* PA6 = INA_V_OUT (输出电压 ÷7 后进 ADC) */
-#define IIN_ADC_OFFSET       0.0f
-#define IOUT_ADC_OFFSET      0.0f
 
 /* ---- 电流采样链路参数 (实物未定, 拿到后只改这一小段) ----
- * 电流 = (ADC 电压 - offset) × scale,  其中 scale = 1 / (采样电阻 × INA199 增益) */
+ * 电流 = ADC 引脚电压 × scale,  其中 scale = 1 / (采样电阻 × INA199 增益) */
 #define IIN_SHUNT_OHM        0.005f  /* 输入电流采样电阻 R6, 单位 Ω (占位值, 待实测替换) */
 #define IOUT_SHUNT_OHM       0.005f  /* 输出电流采样电阻 R7, 单位 Ω (占位值, 待实测替换) */
 #define INA199_GAIN          50.0f   /* INA199 增益, 看丝印: OBG=50 (OBH=100 / OBI=200) */
@@ -700,18 +697,18 @@ static void App_PlayStartupBeeps(void)
   }
 }
 
-/* 采电压组: 输入/输出电压. 真值 = (ADC 电压 - offset) × scale, 系数见文件头部 */
+/* 采电压组: 输入/输出电压. 真值 = ADC 引脚电压 × scale, 系数见文件头部 */
 static void App_SampleVoltageGroup(void)
 {
-  measVin  = (ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) - VIN_ADC_OFFSET)  * VIN_ADC_SCALE;  /* PA7 */
-  measVout = (ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) - VOUT_ADC_OFFSET) * VOUT_ADC_SCALE; /* PA6 */
+  measVin  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) * VIN_ADC_SCALE;  /* PA7 */
+  measVout = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) * VOUT_ADC_SCALE; /* PA6 */
 }
 
 /* 采电流组: 输入/输出电流 */
 static void App_SampleCurrentGroup(void)
 {
-  measIin  = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) - IIN_ADC_OFFSET)  * IIN_ADC_SCALE;  /* PB1 */
-  measIout = (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) - IOUT_ADC_OFFSET) * IOUT_ADC_SCALE; /* PB0 */
+  measIin  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) * IIN_ADC_SCALE;  /* PB1 */
+  measIout = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) * IOUT_ADC_SCALE; /* PB0 */
   ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
 }
 

@@ -15,15 +15,12 @@
   *    Data Size         : 8 Bits
   *    First Bit         : MSB First
   *    Clock Polarity    : Low          \
-  *    Clock Phase       : 1 Edge        > 即 SPI Mode 1, 器件在下降沿锁存 DIN
+  *    Clock Phase       : 2 Edge        > 即 SPI Mode 1, 器件在下降沿锁存 DIN
   *    NSS               : Software
-  *    Baud Rate         : Prescaler 4 -> PCLK1(36MHz)/4 = 9MHz, 低于 20MHz 上限
+  *    Baud Rate         : Prescaler 2 -> PCLK1(36MHz)/2 = 18MHz, 低于 20MHz 上限
   *
-  *  !! 上述参数尚未全部存进 YLD_Cup.ioc (IPParameters 里缺 CLKPolarity /
-  *     CLKPhase / DataSize / FirstBit / NSS / BaudRatePrescaler), 且 .ioc 的
-  *     SPI2.Direction 与 PB13/PB15 的 TX_Only 引脚模式自相矛盾.
-  *     用 CubeMX 重新生成代码前, 必须先按上表把 SPI2 重配一遍, 否则
-  *     MX_SPI2_Init() 会被按 .ioc 覆盖, CPOL/CPHA 一旦回到默认就会整体错位.
+  *  YLD_Cup.ioc 已同步保存以上 SPI2 参数; 重新生成代码后仍请 diff 一下
+  *  MX_SPI2_Init(), 确认 CLKPhase 没有被改回 1 Edge.
   *
   *  数据帧 (24 位, MSB 先行):
   *    DB23 .. DB18 : 无关位

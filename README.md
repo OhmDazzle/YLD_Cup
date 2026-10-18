@@ -102,16 +102,16 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 所以：不要手改生成区（例如 `MX_SPI2_Init()` 里的 CPOL/CPHA）——要改参数请改 `.ioc` 后重新生成，否则下次会被冲掉。重新生成按下面清单走：
 
 1. 先 `git add -A && git commit`，生成后好 diff、好回退。
-2. 按 [AD5662/README.md](AD5662/README.md) 第 2 节把 SPI2 参数在 CubeMX 里重配齐（尤其 CPOL=Low + CPHA=2 Edge），并统一分频口径（÷4 9MHz 或 ÷2 18MHz）。
-3. 顺手把 PB12 初始电平改成 High（见"注意事项"3）。
+2. 按 [AD5662/README.md](AD5662/README.md) 第 2 节确认 SPI2 参数（CPOL=Low + CPHA=2 Edge，÷2 18MHz）。
+3. 确认 PB12 初始电平为 High（见"注意事项"3）。
 4. 生成后重点 diff：`MX_SPI2_Init()` 全部参数、`MX_GPIO_Init()` 的 PA2/PB10/PB12 与按键引脚、外设初始化顺序。
 5. 编译烧录，验证 DAC 输出、OLED、按键与保护流程。
 
 ## 注意事项
 
-1. **`.ioc` 与代码不完全同步**：SPI2 的 CPOL / CPHA / DataSize / FirstBit / NSS / 分频没有全部存进 `.ioc`，重新生成代码前先看 [AD5662/README.md](AD5662/README.md) 第 2 节，避免 DAC 输出整体错位。
-2. **SPI2 分频两个口径**：AD5662 文档推荐 ÷4（9MHz，保裕量），当前代码是 ÷2（18MHz），都在 AD5662 的 20MHz 上限内；下次重新生成前统一成一个口径。
-3. **PB12（SYNC）上电为低**：到 `AD5662_Init()` 才拉高，目前无害（期间无 SCLK），后续可在 CubeMX 里把初始电平改成 High。
+1. **SPI2 参数已同步进 `.ioc`**：CPOL/CPHA/DataSize/FirstBit/NSS/分频都已保存；重新生成后仍要 diff `MX_SPI2_Init()`，确认 CPHA 没有被改回 1 Edge。
+2. **SPI2 分频统一为 ÷2 18MHz**：仍在 AD5662 的 20MHz 上限内；若飞线或布线余量不足，可改为 ÷4 9MHz，并同步修改 `.ioc` 与 `MX_SPI2_Init()`。
+3. **PB12（SYNC）上电已为高**：`MX_GPIO_Init()` 会先把 SYNC 拉高再配置为输出。
 4. **测量标定**：四通道线性标定系数（scale）集中在 `main.c` 头部，不再使用零点/初始引脚电压基准；电流通道单独暴露采样电阻（`IIN/IOUT_SHUNT_OHM`，实物待测）与 INA199 增益（`INA199_GAIN`，丝印 OBG=50 / OBH=100 / OBI=200），改这两个宏后 scale 自动折算。
 5. **OLED 布局**：6×8 字体、行距 8px（y=0/8/…/56），当前每 100ms 整屏重绘；若后面改回局部刷新，注意 `OLED_UpdateArea` 以页（8px）为粒度。
 6. **待机/保护时 Vout 显示 0.00V**：Vout 采样点在输出通断 MOS 内侧，待机时变换器仍在工作、采样点会读到储能电压（约 8~10V），但输出端实际为 0V。固件在非运行状态强制显示 0.00V；调试变换器内部电压请用 TEST 标定固件看原始值。若万用表实测输出端子并非 0V，则需检查 B10 通断级极性/接线。
@@ -121,5 +121,5 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 
 - [ ] 实现闭环 PID（`App_ControlStep()` 占位处）
 - [ ] 用台式表标定四个测量通道（scale），并确认采样电阻阻值与 INA199 增益档位——可直接用 [TEST/README.md](TEST/README.md) 的标定模式
-- [ ] SPI2 相位改为 2 Edge（CPHA=1，依据 AD5662 手册，见 AD5662/README.md）
+- [x] SPI2 相位改为 2 Edge（CPHA=1，依据 AD5662 手册，见 AD5662/README.md）
 - [ ] 台架实测：开机蜂鸣/待机/恒压切换、保护触发与恢复流程

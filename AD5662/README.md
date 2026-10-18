@@ -36,27 +36,27 @@ AD5662 是**只写**器件，没有 SDO 回读引脚。
 | Clock Polarity | Low |
 | Clock Phase | 2 Edge（CPHA=1） |
 | NSS | Software |
-| Prescaler | 4 → 9 MHz |
+| Prescaler | 2 → 18 MHz（也可用 4 → 9 MHz 留更多裕量） |
 
-CPOL = Low + CPHA = 1（CubeMX 里选 **2 Edge**，HAL 为 `SPI_PHASE_2EDGE`）即 **SPI Mode 1**：SCLK 空闲低，器件在**下降沿**锁存 DIN，手册"微处理器接口"一章的 68HC11 示例明确要求主机 CPOL=0、CPHA=1。注意 CubeMX 的 "1 Edge" 对应 CPHA=0（Mode 0），不是本器件要的配置；当前 `MX_SPI2_Init()` 生成的还停在 1 Edge，待修正（见工程 README 待办）。
+CPOL = Low + CPHA = 1（CubeMX 里选 **2 Edge**，HAL 为 `SPI_PHASE_2EDGE`）即 **SPI Mode 1**：SCLK 空闲低，器件在**下降沿**锁存 DIN，手册"微处理器接口"一章的 68HC11 示例明确要求主机 CPOL=0、CPHA=1。注意 CubeMX 的 "1 Edge" 对应 CPHA=0（Mode 0），不是本器件要的配置；主固件和标定固件现已按此配置。
 
-9 MHz 低于 AD5662 在 VDD = 2.7~3.6 V 时的 20 MHz 上限（PCLK1 = 36 MHz，4 分频）。
+18 MHz 低于 AD5662 在 VDD = 2.7~3.6 V 时的 20 MHz 上限（PCLK1 = 36 MHz，2 分频）。若飞线或布线余量不足，可改成 4 分频 9 MHz。
 
-### ⚠️ 重新生成代码前必读
+### ⚠️ 重新生成代码前的检查
 
-`YLD_Cup.ioc` 与当前代码**仍不完全同步**（2026.10.11 核对）：
+`YLD_Cup.ioc` 已保存 SPI2 的关键参数（2026.10.18 核对）：
 
-- `SPI2.IPParameters` 只记录了 `VirtualType,Mode,Direction,CalculateBaudRate`，**`CLKPolarity` / `CLKPhase` / `DataSize` / `FirstBit` / `NSS` / `BaudRatePrescaler` 都没存进去**，重新生成时这些项会按 CubeMX 默认值填充。
-- `ProjectManager.functionlistsort` 里**已有 `MX_SPI2_Init`**，重新生成会正常生成并调用它，但生成的参数不保证与上表一致。
-- .ioc 里 `SPI2.Direction=SPI_DIRECTION_2LINES`、`CalculateBaudRate=18.0 MBits/s`（与当前代码的 ÷2 一致），和上表推荐的 Transmit Only / ÷4 不一致；并且 .ioc 的 `SPI2.Direction` 与 `PB13/PB15.Mode=TX_Only_Simplex_Unidirect_Master` 仍**自相矛盾**。
+- `SPI2.CLKPhase=SPI_PHASE_2EDGE`、`SPI2.CLKPolarity=SPI_POLARITY_LOW`
+- `SPI2.DataSize=SPI_DATASIZE_8BIT`、`SPI2.FirstBit=SPI_FIRSTBIT_MSB`
+- `SPI2.NSS=SPI_NSS_SOFT`、`SPI2.BaudRatePrescaler=SPI_BAUDRATEPRESCALER_2`
 
-后果：直接在 CubeMX 里点 "Generate Code" 而不先改配置，`MX_SPI2_Init()` 会被按 .ioc + 默认值重新生成——**CPOL/CPHA 一旦不对，输出会整体错位**。
+CubeMX 的 "Transmit Only Master" 在 F1 上对应 `SPI_DIRECTION_2LINES`，只启用 MOSI/SCK，不占用 PB14，因此 `.ioc` 的 `SPI2.Direction` 与 `PB13/PB15.Mode=TX_Only_Simplex_Unidirect_Master` 是一致的。
 
-**做法**：在 CubeMX 里按上表把 SPI2 重配一遍再生成，让 .ioc 成为唯一事实来源（Transmit Only / ÷4 9MHz 与当前代码的 2LINES / ÷2 18MHz 二选一，全工程保持一致）。生成后 diff 一下 `MX_SPI2_Init()`，确认参数与选定口径一致。
+重新生成后仍请 diff `MX_SPI2_Init()`，确认 CPOL/CPHA/DataSize/FirstBit/NSS/分频没有被改回默认值。
 
 ### 其他检查项
 
-- **PB12 初始电平建议设为 High**（CubeMX 里 GPIO 配置页的 GPIO output level）。当前 `MX_GPIO_Init()` 生成的是 `RESET`，即上电后到 `AD5662_Init()` 执行前 SYNC 一直处于选中状态。目前无害（这段时间没有 SCLK），但 SYNC 空闲高才是正确状态。注意 `HAL_GPIO_WritePin(...GPIO_PIN_RESET)` 这行在生成区，改用户区会被下次生成冲掉。
+- **PB12 初始电平已设为 High**（CubeMX 里 GPIO 配置页的 GPIO output level）。`MX_GPIO_Init()` 会先把 SYNC 拉高再配置为输出，避免上电后到 `AD5662_Init()` 执行前一直处于选中状态。
 - SPI2 已启用：`HAL_SPI_MODULE_ENABLED` 已打开（`Core/Inc/stm32f1xx_hal_conf.h`），`stm32f1xx_hal_spi.c` 已在编译列表里（`cmake/stm32cubemx/CMakeLists.txt`）。
 
 ### CMakeLists.txt
@@ -365,7 +365,7 @@ int main(void)
 - **器件只写**，`AD5662_GetCode()` 返回的是软件记录值，不是芯片回读值。
 - **输出无法达到 VREF 的轨**：满量程码 65535 对应 `3.3 × 65535/65536 ≈ 3.29995 V`，比 VREF 低 1 LSB。且输出放大器在接近轨时会有几十 mV 的压降，实际满量程输出略低于 3.3V，需要精确满量程时应实测标定。
 - **VREF 直接取自 3.3V 电源时，输出精度受电源纹波影响**。要求高的话应外接基准源（如 ADR444），驱动代码无需改动，只改 `AD5662_Init()` 的 `vref` 实参。
-- `AD5662_VoltageToCode()` / `AD5662_CodeToVoltage()` 不发起传输，可以在中断或高频循环里安全调用；其余函数会阻塞在 SPI 传输上（9 MHz 下 3 字节约 2.7 µs）。写函数**不可重入**，见第 5 节。
+- `AD5662_VoltageToCode()` / `AD5662_CodeToVoltage()` 不发起传输，可以在中断或高频循环里安全调用；其余函数会阻塞在 SPI 传输上（18 MHz 下 3 字节约 1.3 µs，9 MHz 下约 2.7 µs）。写函数**不可重入**，见第 5 节。
 - **忘记调 `AD5662_Init()` 不会 HardFault**。`AD5662_WriteFrame()` 在动手之前会校验句柄：`dev` / `dev->hspi` / `dev->sync_port` 任一为 `NULL` 就返回 `HAL_ERROR`，总线上无动作。这一条不是多余的——`static AD5662_t dac;` 是零初始化的，忘了 Init 直接调 `AD5662_SetVoltage()` 时这三个指针全是 `NULL`，而 `HAL_GPIO_WritePin()` **完全不校验 `GPIOx`**、`HAL_SPI_Transmit()` 也只校验 `pData`，两者都会直接解引用空指针。
 - **`AD5662_Init()` 同样校验 `dev` / `hspi` / `sync_port`**，任一为 `NULL` 就直接返回，不做任何事。
 - **`AD5662_VoltageToCode()` 会挡住 `NaN`**：`NaN` 与任何值比较都为假，不挡住的话会一路穿到 `(uint16_t)` 强转，而浮点转无符号整数在值不可表示时是未定义行为（C11 6.3.1.4）。`dev->vref` 和 `voltage` **两个**入参都做了这道防护，判断都写成 `!(x > 0.0f)` 而不是 `x <= 0.0f`——后者挡不住 `NaN`。`AD5662_SetVoltage()` 传入 `NaN` 时会退化成输出 0V。

@@ -18,26 +18,26 @@
 
 | 信号 | 引脚 | 配置 |
 | --- | --- | --- |
-| SCL | **PA4**（板上丝印 A4） | 开漏输出 `GPIO_MODE_OUTPUT_OD`，无上下拉，高速 |
-| SDA | **PA5**（板上丝印 A5） | 开漏输出 `GPIO_MODE_OUTPUT_OD`，无上下拉，高速 |
+| SCL | **PB3** | 开漏输出 `GPIO_MODE_OUTPUT_OD`，无上下拉，高速 |
+| SDA | **PB4** | 开漏输出 `GPIO_MODE_OUTPUT_OD`，无上下拉，高速 |
 
 对应代码（**换引脚只需改这 4 行宏，其余代码不用动**）：
 
 ```c
-#define OLED_SCL_PORT		GPIOA
-#define OLED_SCL_PIN		GPIO_PIN_4
-#define OLED_SDA_PORT		GPIOA
-#define OLED_SDA_PIN		GPIO_PIN_5
+#define OLED_SCL_PORT		GPIOB
+#define OLED_SCL_PIN		GPIO_PIN_3
+#define OLED_SDA_PORT		GPIOB
+#define OLED_SDA_PIN		GPIO_PIN_4
 ```
 
 - I2C 从机地址固定为 `0x78`（7 位地址 0x3C 左移一位），见 `OLED_WriteCommand()` / `OLED_WriteData()`。
 - 开漏输出依赖外部上拉电阻（OLED 模块一般自带），所以代码中 `Pull = GPIO_NOPULL`。
-- PA4/PA5 在本工程 `.ioc` 里**未被占用**，`MX_GPIO_Init()` 也不碰这两个脚，**不存在引脚冲突**；`OLED_GPIO_Init()` 会自行使能 GPIOA 时钟并把它俩配成开漏输出。
+- PB3/PB4 在本工程 `.ioc` 里已配置为 GPIO 开漏输出（初始高）；`OLED_GPIO_Init()` 会再次使能 GPIOB 时钟并配成开漏。PB3/PB4 复位后是 JTAG 引脚，本工程只用 SWD（PA13/PA14），所以可作普通 GPIO。
 - 若把 SCL / SDA 改到**不同端口**，记得同时在 `OLED_GPIO_Init()` 里使能另一个端口的时钟（HAL 的 `__HAL_RCC_GPIOx_CLK_ENABLE()` 是按端口写死的，没法用宏参数化）。
 
-> **注意**：STM32F103 的 PA4/PA5 同时是内部 DAC 的 `DAC_OUT1` / `DAC_OUT2`（也是 SPI1 的 NSS / SCK）。本工程用的是外部 AD5662（走 SPI2），未使用内部 DAC 与 SPI1，所以没有冲突；但**若以后启用内部 DAC，需要把 OLED 挪到别的引脚**。
+> **注意**：STM32G431 的 PA4 现在是内部 DAC1_OUT1（输出电压控制），所以 OLED 已从 PA4/PA5 挪到 PB3/PB4。PB3/PB4 复位后为 JTAG 引脚，SWD 模式下可作 GPIO；若以后改用 JTAG 调试，需要把 OLED 再挪走。
 
-> **变更记录**：驱动原先接 **PB8(SCL) / PB9(SDA)**。当时 PB9 在 `MX_GPIO_Init()` 里被配成输入上拉（`.ioc` 中 `PB9.Signal=GPIO_Input` 且已 Lock），`OLED_Init()` 必须在其之后调用，否则 SDA 不会输出。现改为 PA4/PA5，该隐患消失；PB8/PB9 空出（`.ioc` 里 PB9 仍保留为 GPIO_Input，未被任何代码使用）。
+> **变更记录**：驱动原先接 PB8(SCL)/PB9(SDA)，后改 PA4/PA5；G431 迁移时 PA4 改为内部 DAC，OLED 最终改到 PB3/PB4。
 
 ### 1.2 显存模型
 
@@ -131,7 +131,7 @@ uint8_t OLED_DisplayBuf[8][128];   // OLED.c:82，占 1KB RAM
 | 函数 | 层级 | 说明 |
 | --- | --- | --- |
 | `OLED_W_SCL` / `OLED_W_SDA` | 引脚 | 写 SCL / SDA 电平。**单片机太快导致通信异常时可在这两个函数里加延时** |
-| `OLED_GPIO_Init` | 引脚 | 使能 GPIOA 时钟，把 PA4/PA5 按 `OLED_SCL_*` / `OLED_SDA_*` 宏配置成开漏输出并释放总线；初始化前有一段约 20 万次空循环等待 OLED 供电稳定 |
+| `OLED_GPIO_Init` | 引脚 | 使能 GPIOB 时钟，把 PB3/PB4 按 `OLED_SCL_*` / `OLED_SDA_*` 宏配置成开漏输出并释放总线；初始化前有一段约 20 万次空循环等待 OLED 供电稳定 |
 | `OLED_I2C_Start` / `OLED_I2C_Stop` | 协议 | I2C 起始 / 终止信号 |
 | `OLED_I2C_SendByte` | 协议 | 发送 1 字节，MSB 先行，**额外的第 9 个时钟不处理应答信号** |
 | `OLED_WriteCommand` | 协议 | 写命令：起始 + `0x78` + `0x00` + 命令 + 终止 |
@@ -189,7 +189,7 @@ while (1)
 
 ## 7. 注意事项汇总
 
-1. **必须调用 `OLED_Init()`**，放在 `MX_GPIO_Init()` 之后的用户代码区即可。PA4/PA5 无引脚冲突，驱动的 GPIO 初始化会自行配置引脚并使能 GPIOA 时钟。
+1. **必须调用 `OLED_Init()`**，放在 `MX_GPIO_Init()` 之后的用户代码区即可。PB3/PB4 在 SWD 调试下可作 GPIO，驱动的 GPIO 初始化会自行配置引脚并使能 GPIOB 时钟。
 2. **显示不等于刷屏**：所有显示/绘图函数只写显存，必须调用 `OLED_Update()` / `OLED_UpdateArea()`。
 3. **`OLED_UpdateArea()` 的粒度是页**，Y 不落在页边界时会连带刷新同页其他内容，局部刷新时注意别把相邻内容刷掉。
 4. **`OLED_ShowImage()` 是覆盖式的**（内部先 `OLED_ClearArea`），在已有内容上叠加会擦掉原内容；需要叠加请用绘图函数逐点画。

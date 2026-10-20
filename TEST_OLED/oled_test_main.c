@@ -18,7 +18,7 @@
   */
 
 #include <stdint.h>
-#include "stm32f1xx_hal.h"
+#include "stm32g4xx_hal.h"
 #include "OLED.h"
 
 /* ---- 本固件的可调参数 ---- */
@@ -470,7 +470,7 @@ static void Test_BuzzerSet(uint8_t on)
   * @brief GPIO 初始化
   *        按键 K1/K2/K3 上拉输入; 同时把输出 MOS、蜂鸣器拉低,
   *        SYNC 置高, 避免测试固件运行时误开输出。
-  *        PA4/PA5 (OLED) 由 OLED_Init() 自行配置。
+  *        PB3/PB4 (OLED) 由 OLED_Init() 自行配置。
   */
 static void MX_GPIO_Init(void)
 {
@@ -479,43 +479,46 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);   /* 蜂鸣器关 */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);  /* 输出 MOS 关 */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);    /* DAC SYNC 空闲高 */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_RESET); /* MOS/蜂鸣器关 */
 
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  /* PA1: 输出 MOS; PA2: 蜂鸣器; 都先拉低 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_2;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_12;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
+  /* 按键: A8 / B11 / B9 上拉输入 (按下=低) */
   GPIO_InitStruct.Pin = GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  GPIO_InitStruct.Pin = GPIO_PIN_9 | GPIO_PIN_11;
+  GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_9;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* OLED SCL/SDA (PB3/PB4) 由 OLED_Init() 配成开漏 */
 }
 
 /**
-  * @brief System Clock Configuration (HSE 8MHz x9 = 72MHz)
+  * @brief System Clock Configuration (HSE 8MHz -> PLL 170MHz)
   */
 static void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
+
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
+  RCC_OscInitStruct.PLL.PLLN = 85;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -525,9 +528,9 @@ static void SystemClock_Config(void)
                               | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
     Error_Handler();
   }

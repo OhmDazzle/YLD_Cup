@@ -11,7 +11,7 @@
 cmake --build --preset Debug --target YLD_Cup_OLEDTest
 ```
 
-产物位于 `build/Debug/TEST_OLED/YLD_Cup_OLEDTest.elf`。固件自带 `main()`、72MHz 时钟和 GPIO 初始化，只复用板级启动/中断/MSP 文件与 `OLED/` 驱动。
+产物位于 `build/Debug/TEST_OLED/YLD_Cup_OLEDTest.elf`。固件自带 `main()`、170MHz 时钟（HSE 8MHz → PLL）和 GPIO 初始化，只复用板级启动/中断/MSP 文件与 `OLED/` 驱动。
 
 ## 2. 接线
 
@@ -19,10 +19,10 @@ cmake --build --preset Debug --target YLD_Cup_OLEDTest
 | --- | --- |
 | VCC | 3.3V |
 | GND | GND |
-| SCL | PA4 |
-| SDA | PA5 |
+| SCL | PB3 |
+| SDA | PB4 |
 
-驱动采用软件 I2C，模块一般自带 SDA/SCL 上拉电阻。若换线或换屏，先确认模块是 **SSD1306、I2C 地址 0x3C（写地址 0x78）**；SH1106 屏需要按 [OLED/README.md](../OLED/README.md) 修改 `OLED_SetCursor()`。
+驱动采用软件 I2C，模块一般自带 SDA/SCL 上拉电阻。PB3/PB4 复位后是 JTAG 引脚，本工程只用 SWD，测试固件里可作普通 GPIO。若换线或换屏，先确认模块是 **SSD1306、I2C 地址 0x3C（写地址 0x78）**；SH1106 屏需要按 [OLED/README.md](../OLED/README.md) 修改 `OLED_SetCursor()`。
 
 ## 3. 操作
 
@@ -50,11 +50,11 @@ cmake --build --preset Debug --target YLD_Cup_OLEDTest
 
 正常屏应看到清晰的单像素点、边界笔直、条纹无断线；静态页不应闪烁，动画页方块移动平滑。若花屏或认不到屏：
 
-1. 确认 VCC/GND、PA4/PA5 接线与模块地址；
+1. 确认 VCC/GND、PB3/PB4 接线与模块地址；
 2. 在 `OLED/OLED.c` 的 `OLED_W_SCL()` / `OLED_W_SDA()` 里加少量延时，排除软件 I2C 过快；
 3. 检查模块是否 3.3V 供电、上拉电阻是否正常。
 
 ## 5. 说明
 
-- 测试固件只配置按键、蜂鸣器和输出 MOS 引脚；蜂鸣器由长按 K3 手动控制，输出 MOS 始终保持关断，**不会开启功率输出**。
+- 测试固件只配置按键、蜂鸣器（PA2）和输出 MOS（PA1）引脚；蜂鸣器由长按 K3 手动控制，输出 MOS 始终保持关断，**不会开启功率输出**。
 - 页面绘制全部走 `OLED_DisplayBuf` + `OLED_Update()`，可顺便验证驱动的显存和整屏刷新路径。

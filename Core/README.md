@@ -1,16 +1,14 @@
 # Core 使用须知（main.c 业务逻辑）
 
-本目录的 `Src/main.c` 是工程主逻辑：CubeMX 生成的初始化骨架 + 写在 `USER CODE` 区块内的业务代码。**只改 `USER CODE` 区块**；重新生成的安全规则见根 [README.md](../README.md) 的"重新生成代码（CubeMX）"一节。
+本目录的 `Src/main.c` 是工程主逻辑：CubeMX 生成的初始化骨架 + 写在 `USER CODE` 区块内的业务代码。**只改 `USER CODE` 区块**；重新生成的安全规则见根 [README.md](../README.md) 的“重新生成代码（CubeMX）”一节。
 
 一句话版：**改参数看第 2 节，改逻辑看第 4 节，生成区别碰。**
-
-![程序逻辑框架](logic-framework.png)
 
 ## 1. 代码地图（USER CODE 区块 → 内容）
 
 | 区块 | 内容 |
 | --- | --- |
-| Includes | `AD5662.h` / `OLED.h`；新增头文件放这里 |
+| Includes | `OLED.h`；新增头文件放这里 |
 | PTD | `AppState_t`（状态机）、`KeyEvent_t` / `Key_t`（按键） |
 | PD | **全部可调参数**（第 2 节速查） |
 | PV | 状态、设定值、测量值、按键对象、循环节拍 |
@@ -35,10 +33,9 @@
 | 宏 | 当前值 | 说明 |
 | --- | --- | --- |
 | `VIN_ADC_SCALE` / `VOUT_ADC_SCALE` | 7.0 | 分压比（输入/输出电压 ÷7 进 ADC），实测后微调 |
-| `IIN_SHUNT_OHM` / `IOUT_SHUNT_OHM` | 0.005（占位） | 输入（R6）/ 输出（R7）电流采样电阻，实测后只改这里 |
-| `INA199_GAIN` | 50.0 | INA199 增益，看丝印：OBG=50 / OBH=100 / OBI=200 |
-| `IIN_ADC_SCALE` / `IOUT_ADC_SCALE` | 自动折算 | = 1 / (采样电阻 × 增益)，改上面两个宏即可，不用手算 |
-采样电阻与增益未最终确定前，先按 0.005Ω × 50 倍占位（等效 scale = 4.0）；实物定值后只需替换 `IIN/IOUT_SHUNT_OHM` 与 `INA199_GAIN`。
+| `IIN_SHUNT_OHM` / `IOUT_SHUNT_OHM` | 0.010（10mΩ） | 输入（R6）/ 输出（R7）电流采样电阻 |
+| `INA199_GAIN` | 50.0 | INA199A1 增益（OBG=50 / OBH=100 / OBI=200） |
+| `IIN_ADC_SCALE` / `IOUT_ADC_SCALE` | 自动折算 | = 1 / (采样电阻 × 增益)，当前 2.0 A/V |
 
 标定流程：不再使用零点/初始引脚电压基准，直接用台式表对比两三个工作点，按比例修 `scale`（`scale新 = scale旧 × 真值 ÷ 显示值`）。
 
@@ -56,7 +53,8 @@
 | `DISPLAY_AVG_TICKS` | 3 | 显示滑动平均窗口（3 × 100 ms = 300 ms，仅影响屏幕，保护用实时值） |
 | `KEY_DEBOUNCE_MS` / `KEY_LONG_MS` | 20 / 800 ms | 按键消抖 / 长按判定 |
 | `BEEP_ON_MS / BEEP_GAP_MS / BEEP_STARTUP_TIMES` | 200 / 500 / 3 | 开机蜂鸣节奏 |
-| `VOUT_DAC_A / VOUT_DAC_B` | 16.4 / 4.0 | 目标电压 → DAC 传递关系（理论值；方向：DAC↑ → Vout↓） |
+| `VOUT_DAC_A / VOUT_DAC_B` | 16.4 / 4.0 | 目标电压 → DAC 传递关系（对应 R13=2.5k；方向：DAC↑ → Vout↓） |
+| `DAC_FULL_SCALE` / `DAC_VMAX` | 4095 / 3.3 | G431 12 位 DAC 满量程与参考电压 |
 
 ## 3. 按键操作（与屏幕提示行一一对应）
 
@@ -66,18 +64,22 @@
 
 ## 4. 常见改动怎么做
 
-- **加一个状态**：`AppState_t` 加枚举 → `App_SetState()` 的 switch 加"进入动作" → `App_HandleKeyEvent()` 加按键响应 → `App_StateText()` 加屏幕文案。
+- **加一个状态**：`AppState_t` 加枚举 → `App_SetState()` 的 switch 加“进入动作” → `App_HandleKeyEvent()` 加按键响应 → `App_StateText()` 加屏幕文案。
 - **改按键分工**：只动 `App_HandleKeyEvent()`。
 - **改主循环步骤**：`USER CODE 3` 里的 6 个步骤，按注释增删。
 - **实现 PID**：填 `App_ControlStep()`（函数头注释里写好了误差定义与负增益方向）。
 - **改屏幕布局**：`App_UpdateDisplay()` + PD 区的 `OLED_*` 布局宏。
+- **改 DAC 传递关系**：只改 `VOUT_DAC_A / VOUT_DAC_B`；硬件反馈网络变了才需要动。
+- **改 ADC 通道**：电压组在 `App_SampleVoltageGroup()`，电流组在 `App_SampleCurrentGroup()`；同时确认 `.ioc` 里的引脚分配。
 
 ## 5. 注意事项
 
 1. `App_ControlStep()` 目前是占位——CV/CC 靠开环预置，不会精确闭环，属预期；接线与标定完成后再填 PID。
-2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道，丢弃切换后的第一个样本，再做 4 次均值转换（239.5 周期采样，单通道约 0.2 ms），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
+2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道，丢弃切换后的第一个样本，再做 4 次均值转换（640.5 周期采样，单通道约 30 µs），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
 3. 显示是整屏重绘（100 ms 一次）；以后若要改回局部刷新，注意 `OLED_UpdateArea()` 以页（8px）为粒度。
-4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单；SPI2 参数见 [AD5662/README.md](../AD5662/README.md) 第 2 节）。
+4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单）。
 5. 屏幕数值用驱动自带的 `OLED_ShowFloatNum`，固定带 `+` 号；在意排版再自行格式化。
 6. 待机/自检/保护状态下屏幕的 Vout 强制显示 0.00V：Vout 采样点在输出 MOS 内侧，变换器储能电压（约 8~10V）不代表输出端电压（实际输出端为 0V）。运行状态（CV/CC）显示真实测量值，后续 PID 也只在运行状态使用 `measVout`。
 7. 屏幕四个测量值取最近 `DISPLAY_AVG_TICKS` 次刷新（默认 300 ms）的滑动平均，仅影响显示；过流/欠压保护仍使用未平滑的实时测量值。状态切换时平均窗口会重置，避免把上一状态的读数带进新状态。
+8. DAC 使用内部 DAC1_OUT1（PA4，12 位）；`App_DacSetVoltage()` 里做了 0~3.3V 限幅与 NaN 防护，不要绕过它直接写 DAC 数据寄存器。
+9. 输出 MOS 是 PA1（高电平导通）；PB9 只作 K3，原理图里 PB9 旁的 `MOS_G` 是标注错误。

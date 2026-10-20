@@ -21,13 +21,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "AD5662.h"
 #include "OLED.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
 /* 应用状态机 (题目 1.1 / 1.2 / 2.1 + 恒流模式) */
 typedef enum
 {
@@ -58,12 +56,10 @@ typedef struct
   uint8_t       longFired;  /* 已产生过长按事件 */
   KeyEvent_t    event;      /* 本次扫描产生的事件 */
 } Key_t;
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
 /* ============================================================================
  * 应用层可调参数 —— 集中放在这里, 后期修改只动这一块
  * ==========================================================================*/
@@ -74,8 +70,9 @@ typedef struct
 /* 12 位 ADC 满量程值 */
 #define ADC_FULL_SCALE       4095.0f
 /* 每个通道的采样时间. 本板电压通道是 10MΩ 级高阻分压, 必须用最长采样时间让
-   采样保持电容充分建立, 否则会出现大幅初始偏移/通道间串扰 */
-#define ADC_SAMPLING_TIME    ADC_SAMPLETIME_239CYCLES_5
+   采样保持电容充分建立, 否则会出现大幅初始偏移/通道间串扰.
+   G431 ADC 时钟 = 170MHz / 8 = 21.25MHz, 640.5 周期约 30us. */
+#define ADC_SAMPLING_TIME    ADC_SAMPLETIME_640CYCLES_5
 /* 每个通道的过采样次数, 用于简单均值滤波 */
 #define ADC_OVERSAMPLING     4U
 /* 单次转换的等待超时, 单位 ms */
@@ -94,22 +91,23 @@ typedef struct
  * 只按比例系数换算, 不再使用零点/初始引脚电压作为基准;
  * 下面先给理论值, 拿万用表/台式表对比后再修 scale.
  * 电压通道 scale 约等于分压比; 电流通道 scale 由下面的采样链路参数自动折算 */
-#define VIN_ADC_SCALE        7.0f    /* PA7 = INA_V_IN  (输入电压 ÷7 后进 ADC) */
-#define VOUT_ADC_SCALE       7.0f    /* PA6 = INA_V_OUT (输出电压 ÷7 后进 ADC) */
+#define VIN_ADC_SCALE        7.0f    /* PA7 = ADC2_IN4 (输入电压 ÷7 后进 ADC) */
+#define VOUT_ADC_SCALE       7.0f    /* PA6 = ADC2_IN3 (输出电压 ÷7 后进 ADC) */
 
-/* ---- 电流采样链路参数 (实物未定, 拿到后只改这一小段) ----
+/* ---- 电流采样链路参数 ----
  * 电流 = ADC 引脚电压 × scale,  其中 scale = 1 / (采样电阻 × INA199 增益) */
-#define IIN_SHUNT_OHM        0.005f  /* 输入电流采样电阻 R6, 单位 Ω (占位值, 待实测替换) */
-#define IOUT_SHUNT_OHM       0.005f  /* 输出电流采样电阻 R7, 单位 Ω (占位值, 待实测替换) */
-#define INA199_GAIN          50.0f   /* INA199 增益, 看丝印: OBG=50 (OBH=100 / OBI=200) */
-#define IIN_ADC_SCALE        (1.0f / (IIN_SHUNT_OHM  * INA199_GAIN))  /* PB1 = 输入电流 */
-#define IOUT_ADC_SCALE       (1.0f / (IOUT_SHUNT_OHM * INA199_GAIN))  /* PB0 = 输出电流 */
+#define IIN_SHUNT_OHM        0.010f  /* 输入电流采样电阻 R6, 单位 Ω (10mΩ) */
+#define IOUT_SHUNT_OHM       0.010f  /* 输出电流采样电阻 R7, 单位 Ω (10mΩ) */
+#define INA199_GAIN          50.0f   /* INA199A1 增益 50 */
+#define IIN_ADC_SCALE        (1.0f / (IIN_SHUNT_OHM  * INA199_GAIN))  /* PB1 = ADC1_IN12 */
+#define IOUT_ADC_SCALE       (1.0f / (IOUT_SHUNT_OHM * INA199_GAIN))  /* PB0 = ADC1_IN15 */
 
-/* ---- DAC -> 输出电压传递关系 (理论值 Vout ≈ A - B × V_DAC, 实测后修正) ----
- * 由注入网络 R10=10k / R1=2.5k / R11=1.2k 推得: Vout ≈ 16.4 - 4 × V_DAC */
+/* ---- DAC -> 输出电压传递关系 (Vout ≈ A - B × V_DAC, 实测后修正) ----
+ * 由注入网络 R10=10k / R13=2.5k / R11=1.2k 推得: Vout ≈ 16.4 - 4 × V_DAC */
 #define VOUT_DAC_A           16.4f
 #define VOUT_DAC_B           4.0f
-#define DAC_VMAX             3.3f    /* AD5662 参考电压 (输出上限) */
+#define DAC_VMAX             3.3f    /* DAC 参考电压 (输出上限) */
+#define DAC_FULL_SCALE       4095.0f /* G431 12 位 DAC 满量程码值 */
 
 /* ---- 运行目标与步进 (题目 1.2 / 2.2 / 恒流模式) ---- */
 #define VOUT_TARGET_DEFAULT  8.0f    /* 恒压模式默认目标电压 */
@@ -151,7 +149,6 @@ typedef struct
 #define OLED_FLOAT_FRA_LEN   2U
 /* 单位列 x: 数值最宽 "+15.00" 6 字符 = 36px, 后留 6px */
 #define OLED_UNIT_X          78U
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -163,16 +160,15 @@ typedef struct
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 
-SPI_HandleTypeDef hspi2;
+DAC_HandleTypeDef hdac1;
 
 /* USER CODE BEGIN PV */
 /* 引脚 -> 通道 (以使用手册 V3.3 为准):
- *   PA7 = INA_V_IN  (输入电压 ÷7),  PA6 = INA_V_OUT (输出电压 ÷7)   -> ADC1
- *   PB1 = 输入电流,                  PB0 = 输出电流                   -> ADC2
- * 输出通断 MOS: B10 (高=导通);  蜂鸣器 MOS: A2 (高=响)
+ *   PA7 = INA_V_IN  (输入电压 ÷7),  PA6 = INA_V_OUT (输出电压 ÷7)   -> ADC2
+ *   PB1 = 输入电流,                  PB0 = 输出电流                   -> ADC1
+ * 输出通断 MOS: PA1 (高=导通);  蜂鸣器 MOS: PA2 (高=响)
  * 按键: A8=K1 升, B11=K2 降, B9=K3 功能键 (上拉输入, 按下=低) */
-/* AD5662: PB13=SCLK, PB15=DIN, PB12=SYNC, VREF=3.3V */
-static AD5662_t dac;
+/* DAC: PA4 = DAC1_OUT1, VREF=3.3V */
 
 /* ---- 状态机 ---- */
 static AppState_t appState = APP_ST_SELF_TEST;
@@ -211,9 +207,9 @@ static uint8_t dispHistFilled = 0U;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_DAC1_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel);
 
@@ -232,6 +228,7 @@ static void  App_ProtectionCheck(void);
 static void  App_UpdateDisplay(void);
 static void  App_DisplayAverage(float *vin, float *vout, float *iin, float *iout);
 static float App_TargetToDac(float vout);
+static void  App_DacSetVoltage(float voltage);
 static float App_Clamp(float v, float lo, float hi);
 static char *App_StateText(AppState_t st);
 /* USER CODE END PFP */
@@ -270,11 +267,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
   MX_ADC2_Init();
-  MX_SPI2_Init();
+  MX_DAC1_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-  /* ---- OLED: 软件 I2C, SCL=PA4, SDA=PA5, 内部含清屏 ---- */
+  /* ---- OLED: 软件 I2C, SCL=PB3, SDA=PB4, 内部含清屏 ---- */
   OLED_Init();
 
   /* 输出 MOS 默认关断 (上电即待机无输出, 题目 1.1), 显式再关一次双保险 */
@@ -282,18 +279,18 @@ int main(void)
   App_Buzzer(0U);
   App_UpdateDisplay();                 /* 先显示 "Power Manager" + SELF TEST */
 
-  /* ---- AD5662: SPI2, SYNC=PB12, 参考电压 3.3V ---- */
-  AD5662_Init(&dac, &hspi2, GPIOB, GPIO_PIN_12, 3.3f);
+  /* ---- DAC1: PA4, 12 位, 参考 3.3V ---- */
+  (void)HAL_DAC_Start(&hdac1, DAC_CHANNEL_1);
   /* 按理论传递关系开环预置到 8V 目标 (DAC ≈ 2.1V), 之后合闸过冲最小;
      实测后可修正 VOUT_DAC_A/B, 或等闭环接管 */
-  (void)AD5662_SetVoltage(&dac, App_TargetToDac(VOUT_TARGET_DEFAULT));
+  App_DacSetVoltage(App_TargetToDac(VOUT_TARGET_DEFAULT));
 
   /* ADC 校准: 上电后各执行一次, 可消除内部电容误差, 提高转换精度 */
-  if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
+  if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
+  if (HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED) != HAL_OK)
   {
     Error_Handler();
   }
@@ -310,7 +307,7 @@ int main(void)
   App_SampleCurrentGroup();
   App_SetState(APP_ST_STANDBY);
   App_UpdateDisplay();
-  /* USER CODE END 2 */
+/* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -361,18 +358,23 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
+  RCC_OscInitStruct.PLL.PLLN = 85;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -384,16 +386,10 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -411,6 +407,7 @@ static void MX_ADC1_Init(void)
 
   /* USER CODE END ADC1_Init 0 */
 
+  ADC_MultiModeTypeDef multimode = {0};
   ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC1_Init 1 */
@@ -420,22 +417,42 @@ static void MX_ADC1_Init(void)
   /** Common config
   */
   hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV8;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.GainCompensation = 0;
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.LowPowerAutoWait = DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure the ADC multi-mode
+  */
+  multimode.Mode = ADC_MODE_INDEPENDENT;
+  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
   {
     Error_Handler();
   }
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_6;
+  sConfig.Channel = ADC_CHANNEL_15;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -467,12 +484,21 @@ static void MX_ADC2_Init(void)
   /** Common config
   */
   hadc2.Instance = ADC2;
+  hadc2.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV8;
+  hadc2.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc2.Init.GainCompensation = 0;
   hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc2.Init.LowPowerAutoWait = DISABLE;
   hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.NbrOfConversion = 1;
   hadc2.Init.DiscontinuousConvMode = DISABLE;
   hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc2.Init.NbrOfConversion = 1;
+  hadc2.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc2.Init.DMAContinuousRequests = DISABLE;
+  hadc2.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  hadc2.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc2) != HAL_OK)
   {
     Error_Handler();
@@ -480,9 +506,12 @@ static void MX_ADC2_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -494,40 +523,49 @@ static void MX_ADC2_Init(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
+  * @brief DAC1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI2_Init(void)
+static void MX_DAC1_Init(void)
 {
 
-  /* USER CODE BEGIN SPI2_Init 0 */
+  /* USER CODE BEGIN DAC1_Init 0 */
 
-  /* USER CODE END SPI2_Init 0 */
+  /* USER CODE END DAC1_Init 0 */
 
-  /* USER CODE BEGIN SPI2_Init 1 */
+  DAC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  /* USER CODE BEGIN DAC1_Init 1 */
+
+  /* USER CODE END DAC1_Init 1 */
+
+  /** DAC Initialization
+  */
+  hdac1.Instance = DAC1;
+  if (HAL_DAC_Init(&hdac1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
 
-  /* USER CODE END SPI2_Init 2 */
+  /** DAC channel OUT1 config
+  */
+  sConfig.DAC_HighFrequency = DAC_HIGH_FREQUENCY_INTERFACE_MODE_AUTOMATIC;
+  sConfig.DAC_DMADoubleDataMode = DISABLE;
+  sConfig.DAC_SignedFormat = DISABLE;
+  sConfig.DAC_SampleAndHold = DAC_SAMPLEANDHOLD_DISABLE;
+  sConfig.DAC_Trigger = DAC_TRIGGER_NONE;
+  sConfig.DAC_Trigger2 = DAC_TRIGGER_NONE;
+  sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
+  sConfig.DAC_ConnectOnChipPeripheral = DAC_CHIPCONNECT_EXTERNAL;
+  sConfig.DAC_UserTrimming = DAC_TRIMMING_FACTORY;
+  if (HAL_DAC_ConfigChannel(&hdac1, &sConfig, DAC_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN DAC1_Init 2 */
+
+  /* USER CODE END DAC1_Init 2 */
 
 }
 
@@ -544,37 +582,22 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1|GPIO_PIN_2, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3|GPIO_PIN_4, GPIO_PIN_SET);
 
-  /*Configure GPIO pin : PA2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  /*Configure GPIO pins : PA1 PA2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PA4 PA5 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB10 PB12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_12;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB11 PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_9;
@@ -588,6 +611,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : PB3 PB4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
@@ -599,8 +629,9 @@ static void MX_GPIO_Init(void)
   * @note   CubeMX 中 ADC 配置为 "ScanConvMode = Disable, NbrOfConversion = 1",
   *         因此这里在每次转换前把目标通道写入规则组 Rank1, 逐个通道轮流采集,
   *         不需要修改 MX_ADCx_Init() 生成的代码, 也不需要 DMA.
+  *         G431 的 ADC 通道是单端/差分可选的, 这里固定用单端.
   * @param  hadc    : ADC 句柄, hadc1 或 hadc2
-  * @param  channel : ADC 通道宏, 例如 ADC_CHANNEL_6
+  * @param  channel : ADC 通道宏, 例如 ADC_CHANNEL_15
   * @retval 电压值, 单位 V; 转换失败时返回 0.0f
   */
 static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
@@ -616,6 +647,9 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
   sConfig.Channel = channel;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLING_TIME;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0U;
   if (HAL_ADC_ConfigChannel(hadc, &sConfig) != HAL_OK)
   {
     return 0.0f;
@@ -671,13 +705,39 @@ static float App_TargetToDac(float vout)
   return App_Clamp((VOUT_DAC_A - vout) / VOUT_DAC_B, 0.0f, DAC_VMAX);
 }
 
-/* 输出通断 MOS: B10 高电平导通 (使用手册) */
-static void App_OutputEnable(uint8_t on)
+/* DAC 电压 -> 12 位码值并写入 DAC1_OUT1 (PA4).
+ * 3.3V 对应 4095, 四舍五入; 同时挡住 NaN / 越界, 避免浮点转整数未定义行为 */
+static void App_DacSetVoltage(float voltage)
 {
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  float code;
+
+  if (!(voltage > 0.0f))
+  {
+    (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 0U);
+    return;
+  }
+  if (voltage >= DAC_VMAX)
+  {
+    (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
+                          (uint32_t)DAC_FULL_SCALE);
+    return;
+  }
+
+  code = voltage * DAC_FULL_SCALE / DAC_VMAX + 0.5f;
+  if (code >= DAC_FULL_SCALE)
+  {
+    code = DAC_FULL_SCALE;
+  }
+  (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)code);
 }
 
-/* 蜂鸣器 MOS: A2 高电平导通 */
+/* 输出通断 MOS: PA1 高电平导通 */
+static void App_OutputEnable(uint8_t on)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* 蜂鸣器 MOS: PA2 高电平导通 */
 static void App_Buzzer(uint8_t on)
 {
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -701,15 +761,15 @@ static void App_PlayStartupBeeps(void)
 /* 采电压组: 输入/输出电压. 真值 = ADC 引脚电压 × scale, 系数见文件头部 */
 static void App_SampleVoltageGroup(void)
 {
-  measVin  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_7) * VIN_ADC_SCALE;  /* PA7 */
-  measVout = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_6) * VOUT_ADC_SCALE; /* PA6 */
+  measVin  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_4) * VIN_ADC_SCALE;  /* PA7 */
+  measVout = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_3) * VOUT_ADC_SCALE; /* PA6 */
 }
 
 /* 采电流组: 输入/输出电流 */
 static void App_SampleCurrentGroup(void)
 {
-  measIin  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_9) * IIN_ADC_SCALE;  /* PB1 */
-  measIout = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_8) * IOUT_ADC_SCALE; /* PB0 */
+  measIin  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_12) * IIN_ADC_SCALE;  /* PB1 */
+  measIout = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_15) * IOUT_ADC_SCALE; /* PB0 */
   ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
 }
 
@@ -831,12 +891,12 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
       if ((idx == KEY_IDX_UP) && (ev == KEY_EV_SHORT))
       {
         targetV = App_Clamp(targetV + VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
-        (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
+        App_DacSetVoltage(App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
       }
       else if ((idx == KEY_IDX_DOWN) && (ev == KEY_EV_SHORT))
       {
         targetV = App_Clamp(targetV - VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
-        (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
+        App_DacSetVoltage(App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
       }
       else if (idx == KEY_IDX_FUNC)
       {
@@ -939,7 +999,7 @@ static void App_SetState(AppState_t next)
 
     case APP_ST_CV:
       targetV = App_Clamp(targetV, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
-      (void)AD5662_SetVoltage(&dac, App_TargetToDac(targetV)); /* 开环预置, 减小合闸过冲 */
+      App_DacSetVoltage(App_TargetToDac(targetV)); /* 开环预置, 减小合闸过冲 */
       App_OutputEnable(1U);
       App_Buzzer(0U);
       protBlankUntil = HAL_GetTick() + PROT_BLANK_MS;

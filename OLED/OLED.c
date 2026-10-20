@@ -18,7 +18,7 @@
   ***************************************************************************************
   */
 
-#include "stm32f1xx_hal.h"
+#include "stm32g4xx_hal.h"
 #include "OLED.h"
 #include <string.h>
 #include <math.h>
@@ -86,13 +86,13 @@ uint8_t OLED_DisplayBuf[8][128];
 
 /*引脚配置*********************/
 
-/*引脚定义：SCL 接 PA4，SDA 接 PA5*/
+/*引脚定义：SCL 接 PB3，SDA 接 PB4*/
 /*如需更换引脚，只需修改以下四个宏，其余代码无需改动*/
 /*注意：若 SCL 与 SDA 被改到不同端口，需在 OLED_GPIO_Init 里同时使能两个端口的时钟*/
-#define OLED_SCL_PORT		GPIOA
-#define OLED_SCL_PIN		GPIO_PIN_4
-#define OLED_SDA_PORT		GPIOA
-#define OLED_SDA_PIN		GPIO_PIN_5
+#define OLED_SCL_PORT		GPIOB
+#define OLED_SCL_PIN		GPIO_PIN_3
+#define OLED_SDA_PORT		GPIOB
+#define OLED_SDA_PIN		GPIO_PIN_4
 
 /**
   * 函    数：OLED写SCL高低电平
@@ -147,7 +147,7 @@ void OLED_GPIO_Init(void)
 	}
 	
 	/*将SCL和SDA引脚初始化为开漏模式*/
-    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
 	
 	GPIO_InitTypeDef GPIO_InitStructure;
  	GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_OD;

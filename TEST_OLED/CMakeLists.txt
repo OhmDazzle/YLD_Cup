@@ -17,9 +17,9 @@ add_executable(${CMAKE_PROJECT_NAME}_OLEDTest)
 
 target_sources(${CMAKE_PROJECT_NAME}_OLEDTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/oled_test_main.c
-    ${CMAKE_SOURCE_DIR}/startup_stm32f103xb.s
-    ${CMAKE_SOURCE_DIR}/Core/Src/stm32f1xx_it.c
-    ${CMAKE_SOURCE_DIR}/Core/Src/stm32f1xx_hal_msp.c
+    ${CMAKE_SOURCE_DIR}/startup_stm32g431xx.s
+    ${CMAKE_SOURCE_DIR}/Core/Src/stm32g4xx_it.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/stm32g4xx_hal_msp.c
     ${CMAKE_SOURCE_DIR}/Core/Src/sysmem.c
     ${CMAKE_SOURCE_DIR}/Core/Src/syscalls.c
     ${CMAKE_SOURCE_DIR}/OLED/OLED.c
@@ -30,7 +30,7 @@ target_include_directories(${CMAKE_PROJECT_NAME}_OLEDTest PRIVATE
     ${CMAKE_SOURCE_DIR}/OLED
 )
 
-# 头文件路径 / USE_HAL_DRIVER / STM32F103xB 由 stm32cubemx 接口库带出
+# 头文件路径 / USE_HAL_DRIVER / STM32G431xx 由 stm32cubemx 接口库带出
 target_link_libraries(${CMAKE_PROJECT_NAME}_OLEDTest PRIVATE
     stm32cubemx
     STM32_Drivers

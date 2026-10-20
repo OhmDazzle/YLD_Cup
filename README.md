@@ -4,7 +4,7 @@
 
 ## 当前实现
 
-- 上电：输出 MOS 保持关断（无输出），蜂鸣器响 3 声（间隔 0.5s），屏幕显示 "Power Manager" + 状态
+- 上电：输出 MOS 保持关断（负端断开，正端仍可能带电），蜂鸣器响 3 声（间隔 0.5s），屏幕显示 "Power Manager" + 状态
 - 主逻辑框架（`Core/Src/main.c` 用户区，可调参数全部集中在文件头部）：
   - 状态机：待机 / 恒压 / 恒流 / 过流保护 / 欠压保护 / ADC 故障；闭环 PID 为占位（`App_ControlStep()`），下一版实现
   - 采样调度：按"电压组 : 电流组"的时隙占比轮流采集——恒压偏电压、恒流偏电流，比例在文件顶部 `CV_VOLT_SLOTS` / `CC_CURR_SLOTS` 等宏自定义
@@ -51,6 +51,7 @@
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |
 | `TEST/` | 独立采样标定固件（单独编译/烧录，实测采样电阻与分压系数），用法见 [TEST/README.md](TEST/README.md) |
 | `TEST_OLED/` | 独立 OLED 测试固件（单独编译/烧录，六页图形/文字/动画自检，K3 长按控制蜂鸣器），用法见 [TEST_OLED/README.md](TEST_OLED/README.md) |
+| `TEST_MODULES/` | 独立 DAC/运放、四路 ADC、按键/蜂鸣器测试，各自单独烧录，步骤见 [模块测试说明](TEST_MODULES/README.md) |
 | `cmake/` | arm-none-eabi-gcc 工具链文件与 CubeMX 源文件清单 |
 | `YLD_CUP.ioc` | CubeMX 工程文件（G431 配置，重新生成前先看"注意事项"） |
 
@@ -76,7 +77,7 @@
 
 ```bash
 cmake --preset Debug          # 配置，输出到 build/Debug
-cmake --build --preset Debug  # 编译主固件 + 两个测试固件
+cmake --build --preset Debug  # 编译主固件及全部独立测试固件
 
 # 只编译主固件
 cmake --build --preset Debug --target YLD_Cup
@@ -86,9 +87,16 @@ cmake --build --preset Debug --target YLD_Cup_Calib
 
 # 只编译独立 OLED 测试固件
 cmake --build --preset Debug --target YLD_Cup_OLEDTest
+
+# 分别编译 DAC/运放、ADC、按键/蜂鸣器测试
+cmake --build --preset Debug --target YLD_Cup_OpampTest
+cmake --build --preset Debug --target YLD_Cup_ADCTest
+cmake --build --preset Debug --target YLD_Cup_GPIOTest
 ```
 
 CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
+
+模块测试的接线、按键及预期读数见 [TEST_MODULES/README.md](TEST_MODULES/README.md)。逻辑测试命令为 `python3 tests/run_module_logic.py`；实际 DAC/运放和 INA199 链路仍需万用表、已知电压/电流台架验证。
 
 ## 重新生成代码（CubeMX）
 
@@ -97,7 +105,7 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 | 位置 | 内容 | 重新生成时 |
 | --- | --- | --- |
 | `main.c` 的 `USER CODE BEGIN/END` 区块（Includes / PTD / PD / PV / PFP / 2 / 3 / 4 / MX_GPIO_Init_2 / Error_Handler_Debug） | 全部业务逻辑与可调参数 | 原样保留 |
-| `OLED/`、`TEST/`、`TEST_OLED/` 目录 | 自建驱动 / 独立测试固件 | CubeMX 不管理，不受影响 |
+| `OLED/`、`TEST/`、`TEST_OLED/`、`TEST_MODULES/` 目录 | 自建驱动 / 独立测试固件 | CubeMX 不管理，不受影响 |
 | 顶层 `CMakeLists.txt` | 自加源文件与头文件路径 | 只在首次生成，之后不再重写 |
 | `main.c` 区块之外（`MX_*_Init()`、`SystemClock_Config()` 等）和 `cmake/stm32cubemx/` | CubeMX 生成区 | **会被覆盖重写** |
 

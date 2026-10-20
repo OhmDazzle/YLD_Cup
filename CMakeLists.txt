@@ -87,5 +87,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # ---- 独立测试固件: 单独编译、单独烧录, 不影响主固件 ----
 #   TEST/       : 采样标定固件     cmake --build --preset Debug --target YLD_Cup_Calib
 #   TEST_OLED/  : OLED 自检固件    cmake --build --preset Debug --target YLD_Cup_OLEDTest
+#   TEST_MODULES/: DAC/运放、ADC、按键/蜂鸣器三个独立测试目标
 add_subdirectory(TEST)
 add_subdirectory(TEST_OLED)
+add_subdirectory(TEST_MODULES)

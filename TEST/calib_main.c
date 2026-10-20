@@ -26,7 +26,7 @@
   *    K3:OUT K1/K2:SET
   *    AVG=16 SAMPLES
   *
-  *  按键: K3(B9) 输出 MOS 开/关; K1(A8)/K2(B11) 目标 ±1V (5~15V).
+  *  按键: K3(PB13) 输出 MOS 开/关; K1(PB15)/K2(PB14) 目标 ±1V (5~15V).
   *  用仪器提供已知的输入/输出电压电流, 对照屏上原始值即可反推系数,
   *  测量方法与计算公式见 TEST/README.md.
   ******************************************************************************
@@ -43,8 +43,8 @@
 #define CAL_LOOP_MS          50U    /* 屏幕刷新间隔 */
 #define CAL_DEBOUNCE_MS      20U
 
-#define CAL_VOUT_DAC_A       16.4f  /* 与主固件 VOUT_DAC_A/B 保持一致 */
-#define CAL_VOUT_DAC_B       4.0f
+#define CAL_VOUT_DAC_A       17.07091f  /* 与主固件 VOUT_DAC_A/B 保持一致 */
+#define CAL_VOUT_DAC_B       4.545455f
 #define CAL_DAC_VMAX         3.3f
 #define CAL_DAC_FULL_SCALE   4095.0f
 #define CAL_TARGET_DEFAULT   8.0f
@@ -138,7 +138,7 @@ int main(void)
     OLED_Update();
 
     /* 3. 按键 (K3 优先): 输出开关 / 目标 ±1V */
-    if (Cal_KeyPressed(GPIOB, GPIO_PIN_9) != 0U)       /* K3: 输出开/关 */
+    if (Cal_KeyPressed(GPIOB, GPIO_PIN_13) != 0U)       /* K3: 输出开/关 */
     {
       out_on = (out_on == 0U) ? 1U : 0U;
       if (out_on != 0U)
@@ -147,7 +147,7 @@ int main(void)
       }
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, (out_on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
     }
-    else if (Cal_KeyPressed(GPIOA, GPIO_PIN_8) != 0U)  /* K1: 目标 +1V */
+    else if (Cal_KeyPressed(GPIOB, GPIO_PIN_15) != 0U)  /* K1: 目标 +1V */
     {
       target = Cal_Clamp(target + CAL_TARGET_STEP, CAL_TARGET_MIN, CAL_TARGET_MAX);
       if (out_on != 0U)
@@ -155,7 +155,7 @@ int main(void)
         Cal_DacSetVoltage(Cal_TargetToDac(target));
       }
     }
-    else if (Cal_KeyPressed(GPIOB, GPIO_PIN_11) != 0U) /* K2: 目标 -1V */
+    else if (Cal_KeyPressed(GPIOB, GPIO_PIN_14) != 0U) /* K2: 目标 -1V */
     {
       target = Cal_Clamp(target - CAL_TARGET_STEP, CAL_TARGET_MIN, CAL_TARGET_MAX);
       if (out_on != 0U)
@@ -341,7 +341,7 @@ static void SystemClock_Config(void)
 }
 
 /**
-  * @brief GPIO 初始化 (PA1 输出 MOS, PA2 蜂鸣器, A8/B11/B9 按键,
+  * @brief GPIO 初始化 (PA1 输出 MOS, PA2 蜂鸣器, PB15/PB14/PB13 按键,
   *        PB3/PB4 OLED; PA4/PA6/PA7/PB0/PB1 由 ADC/DAC MSP 配置)
   */
 static void MX_GPIO_Init(void)
@@ -369,13 +369,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* 按键: A8 / B11 / B9 上拉输入 (按下=低) */
-  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  /* 按键: PB15 / PB14 / PB13 上拉输入 (按下=低) */
+  GPIO_InitStruct.Pin = GPIO_PIN_15 | GPIO_PIN_14 | GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_9;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 

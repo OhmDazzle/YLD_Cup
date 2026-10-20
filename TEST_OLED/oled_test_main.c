@@ -7,13 +7,13 @@
   *  只复用板级文件 (启动/中断/MSP) 和 OLED 驱动.
   *  构建目标: YLD_Cup_OLEDTest (见 TEST_OLED/CMakeLists.txt).
   *
-  *  屏幕为 0.96 寸 128x64, 软件 I2C: SCL=PA4, SDA=PA5.
+  *  屏幕为 0.96 寸 128x64, 软件 I2C: SCL=PB3, SDA=PB4.
   *  六个测试页循环显示, 用于检查坏点、缺行/缺列、对比度与刷屏速度:
   *    0 文字/中文字模   1 单像素网格     2 1px/2px 条纹
   *    3 灰度密度图      4 图形与直线     5 动画与进度条
   *
-  *  按键: K1(PA8) 上一页, K2(PB11) 下一页,
-  *        K3(PB9) 短按切换自动翻页, 长按切换蜂鸣器 (PA2 高电平=响).
+  *  按键: K1(PB15) 上一页, K2(PB14) 下一页,
+  *        K3(PB13) 短按切换自动翻页, 长按切换蜂鸣器 (PA2 高电平=响).
   ******************************************************************************
   */
 
@@ -58,9 +58,9 @@ typedef struct
 
 static TestKey_t keys[3] =
 {
-  { .port = GPIOA, .pin = GPIO_PIN_8  },                    /* K1: 上一页 */
-  { .port = GPIOB, .pin = GPIO_PIN_11 },                    /* K2: 下一页 */
-  { .port = GPIOB, .pin = GPIO_PIN_9, .longEnabled = 1U },  /* K3: 短按/长按 */
+  { .port = GPIOB, .pin = GPIO_PIN_15 },                    /* K1: 上一页 */
+  { .port = GPIOB, .pin = GPIO_PIN_14 },                    /* K2: 下一页 */
+  { .port = GPIOB, .pin = GPIO_PIN_13, .longEnabled = 1U },  /* K3: 短按/长按 */
 };
 
 /* ---- 测试状态 ---- */
@@ -488,13 +488,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /* 按键: A8 / B11 / B9 上拉输入 (按下=低) */
-  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  /* 按键: PB15 / PB14 / PB13 上拉输入 (按下=低) */
+  GPIO_InitStruct.Pin = GPIO_PIN_15 | GPIO_PIN_14 | GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_9;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* OLED SCL/SDA (PB3/PB4) 由 OLED_Init() 配成开漏 */

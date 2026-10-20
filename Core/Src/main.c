@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "OLED.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,6 +36,7 @@ typedef enum
   APP_ST_CC,              /* 恒流模式 */
   APP_ST_PROT_OCP,        /* 过流保护: 关输出 + 报警, 手动解除 */
   APP_ST_PROT_UVP,        /* 欠压保护: 关输出 + 报警, 自动恢复 */
+  APP_ST_PROT_ADC,        /* 采样故障: 关输出 + 报警, 手动重试后回待机 */
 } AppState_t;
 
 /* 按键事件 */
@@ -51,8 +53,9 @@ typedef struct
   GPIO_TypeDef *port;
   uint16_t      pin;
   uint8_t       stable;     /* 消抖后的稳定电平: 1=松开, 0=按下 */
-  uint8_t       count;      /* 电平抖动计数 */
-  uint16_t      holdMs;     /* 本次按住已持续时长 */
+  uint8_t       rawLast;    /* 上一次原始电平 */
+  uint32_t      changedAt;  /* 原始电平改变的时刻 */
+  uint32_t      pressedAt;  /* 消抖确认按下的时刻 */
   uint8_t       longFired;  /* 已产生过长按事件 */
   KeyEvent_t    event;      /* 本次扫描产生的事件 */
 } Key_t;
@@ -69,9 +72,9 @@ typedef struct
 #define ADC_VREF             3.3f
 /* 12 位 ADC 满量程值 */
 #define ADC_FULL_SCALE       4095.0f
-/* 每个通道的采样时间. 本板电压通道是 10MΩ 级高阻分压, 必须用最长采样时间让
-   采样保持电容充分建立, 否则会出现大幅初始偏移/通道间串扰.
-   G431 ADC 时钟 = 170MHz / 8 = 21.25MHz, 640.5 周期约 30us. */
+/* 2026-10-20 原理图: 60kΩ/10kΩ 分压, 节点对地 100nF.
+   保留 640.5 周期与切换后弃样, ADC 时钟 170/8=21.25MHz;
+   单次采样约 30us, 一个通道含弃样及 4 次均值至少约 150us. */
 #define ADC_SAMPLING_TIME    ADC_SAMPLETIME_640CYCLES_5
 /* 每个通道的过采样次数, 用于简单均值滤波 */
 #define ADC_OVERSAMPLING     4U
@@ -87,26 +90,35 @@ typedef struct
 #define CC_VOLT_SLOTS        1U    /* 恒流模式: 电压组时隙数 */
 #define CC_CURR_SLOTS        4U    /* 恒流模式: 电流组时隙数 */
 
-/* ---- 测量通道线性标定: 真值 = ADC 引脚电压 × scale ----
- * 只按比例系数换算, 不再使用零点/初始引脚电压作为基准;
- * 下面先给理论值, 拿万用表/台式表对比后再修 scale.
- * 电压通道 scale 约等于分压比; 电流通道 scale 由下面的采样链路参数自动折算 */
+/* ---- 电压测量: 真值 = ADC 引脚电压 × scale ----
+ * R4/R8=60kΩ, R2/R3=10kΩ, 理论分压比 7.0; 实测后各自标定. */
 #define VIN_ADC_SCALE        7.0f    /* PA7 = ADC2_IN4 (输入电压 ÷7 后进 ADC) */
 #define VOUT_ADC_SCALE       7.0f    /* PA6 = ADC2_IN3 (输出电压 ÷7 后进 ADC) */
 
-/* ---- 电流采样链路参数 ----
- * 电流 = ADC 引脚电压 × scale,  其中 scale = 1 / (采样电阻 × INA199 增益) */
-#define IIN_SHUNT_OHM        0.010f  /* 输入电流采样电阻 R6, 单位 Ω (10mΩ) */
-#define IOUT_SHUNT_OHM       0.010f  /* 输出电流采样电阻 R7, 单位 Ω (10mΩ) */
+/* ---- 电流采样: I = raw × [GAIN_TRIM / (Rshunt × G)] + OFFSET_A ----
+ * REF 继续接地, 不做上电自动归零 (输入空载仍有静态电流).
+ * 用两个非零电流点拟合 k=(I2-I1)/(raw2-raw1), b=I1-k*raw1:
+ * GAIN_TRIM=k*Rshunt*G, OFFSET_A=b. 两路独立标定; 这里不是实测值.
+ * REF=0 时零点附近可能限幅, 标定需覆盖实际最低工作电流. */
+#define IIN_SHUNT_OHM        0.020f  /* 输入采样电阻 R6, Ω (20mΩ) */
+#define IOUT_SHUNT_OHM       0.020f  /* 输出采样电阻 R1, Ω (20mΩ) */
 #define INA199_GAIN          50.0f   /* INA199A1 增益 50 */
-#define IIN_ADC_SCALE        (1.0f / (IIN_SHUNT_OHM  * INA199_GAIN))  /* PB1 = ADC1_IN12 */
-#define IOUT_ADC_SCALE       (1.0f / (IOUT_SHUNT_OHM * INA199_GAIN))  /* PB0 = ADC1_IN15 */
+#define IIN_GAIN_TRIM        1.0f
+#define IOUT_GAIN_TRIM       1.0f
+#define IIN_OFFSET_A         0.0f
+#define IOUT_OFFSET_A        0.0f
+#define IIN_ADC_SCALE        (IIN_GAIN_TRIM  / (IIN_SHUNT_OHM  * INA199_GAIN))
+#define IOUT_ADC_SCALE       (IOUT_GAIN_TRIM / (IOUT_SHUNT_OHM * INA199_GAIN))
 
 /* ---- DAC -> 输出电压传递关系 (Vout ≈ A - B × V_DAC, 实测后修正) ----
- * 由注入网络 R10=10k / R13=2.5k / R11=1.2k 推得: Vout ≈ 16.4 - 4 × V_DAC */
-#define VOUT_DAC_A           16.4f
-#define VOUT_DAC_B           4.0f
-#define DAC_VMAX             3.3f    /* DAC 参考电压 (输出上限) */
+ * R10=10k / R13=2.2k / R11=1.2k, LM2596 Vfb 典型 1.23V:
+ * A=1.23*(1+10/1.2+10/2.2), B=10/2.2. 实测后再修正.
+ * 这是反馈设定范围, 不保证 16V 输入时功率级能带载输出 15V. */
+#define VOUT_DAC_A           17.07091f
+#define VOUT_DAC_B           4.545455f
+#define DAC_VMAX             3.3f    /* DAC 参考电压, 用于码值换算 */
+#define DAC_OUTPUT_MIN_V     0.2f    /* 缓冲开启后的规定输出范围 */
+#define DAC_OUTPUT_MAX_V     (DAC_VMAX - 0.2f)
 #define DAC_FULL_SCALE       4095.0f /* G431 12 位 DAC 满量程码值 */
 
 /* ---- 运行目标与步进 (题目 1.2 / 2.2 / 恒流模式) ---- */
@@ -124,7 +136,7 @@ typedef struct
 #define OCP_CONFIRM_MS       50U     /* 过流需"持续"该时长才锁存保护, 防负载瞬变误触发 */
 #define UVP_TRIP_V           12.5f   /* Vin 低于 -> 欠压保护 (自动恢复) */
 #define UVP_RECOVER_V        13.0f   /* Vin 回升到该值 -> 自动恢复 (留迟滞) */
-#define PROT_BLANK_MS        300U    /* 合闸后的保护屏蔽时间, 防浪涌误触发 */
+#define PROT_BLANK_MS        300U    /* 合闸后的过流屏蔽期; 欠压/ADC 故障不屏蔽 */
 
 /* ---- 时序 ---- */
 #define APP_LOOP_PERIOD_MS   10U     /* 主循环节拍 */
@@ -136,7 +148,11 @@ typedef struct
 #define BEEP_GAP_MS          500U    /* 开机蜂鸣: 两声间隔 (题目 1.1) */
 #define BEEP_STARTUP_TIMES   3U      /* 开机蜂鸣次数 */
 
-/* ---- 按键索引 (K1=A8 升, K2=B11 降, K3=B9 功能键; 按下=低) ---- */
+/* ---- 按键: 新图 K1=PB15 升, K2=PB14 降, K3=PB13 功能; 按下=低 ---- */
+#define KEY_PORT             GPIOB
+#define KEY_UP_PIN           GPIO_PIN_15
+#define KEY_DOWN_PIN         GPIO_PIN_14
+#define KEY_FUNC_PIN         GPIO_PIN_13
 #define KEY_IDX_UP           0U
 #define KEY_IDX_DOWN         1U
 #define KEY_IDX_FUNC         2U
@@ -163,11 +179,11 @@ ADC_HandleTypeDef hadc2;
 DAC_HandleTypeDef hdac1;
 
 /* USER CODE BEGIN PV */
-/* 引脚 -> 通道 (以使用手册 V3.3 为准):
+/* 引脚 -> 通道 (以 2026-10-20 G431 原理图为准, 旧使用手册不适用):
  *   PA7 = INA_V_IN  (输入电压 ÷7),  PA6 = INA_V_OUT (输出电压 ÷7)   -> ADC2
  *   PB1 = 输入电流,                  PB0 = 输出电流                   -> ADC1
  * 输出通断 MOS: PA1 (高=导通);  蜂鸣器 MOS: PA2 (高=响)
- * 按键: A8=K1 升, B11=K2 降, B9=K3 功能键 (上拉输入, 按下=低) */
+ * 按键: PB15=K1 升, PB14=K2 降, PB13=K3 功能键 (上拉输入, 按下=低) */
 /* DAC: PA4 = DAC1_OUT1, VREF=3.3V */
 
 /* ---- 状态机 ---- */
@@ -191,9 +207,9 @@ static float measIout = 0.0f;
 /* ---- 按键 (K1 / K2 / K3) ---- */
 static Key_t keys[3] =
 {
-  { GPIOA, GPIO_PIN_8,  1U, 0U, 0U, 0U, KEY_EV_NONE },
-  { GPIOB, GPIO_PIN_11, 1U, 0U, 0U, 0U, KEY_EV_NONE },
-  { GPIOB, GPIO_PIN_9,  1U, 0U, 0U, 0U, KEY_EV_NONE },
+  { .port = KEY_PORT, .pin = KEY_UP_PIN,   .stable = 1U, .rawLast = 1U },
+  { .port = KEY_PORT, .pin = KEY_DOWN_PIN, .stable = 1U, .rawLast = 1U },
+  { .port = KEY_PORT, .pin = KEY_FUNC_PIN, .stable = 1U, .rawLast = 1U },
 };
 
 /* ---- 循环节拍 ---- */
@@ -211,15 +227,17 @@ static void MX_ADC2_Init(void);
 static void MX_DAC1_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
-static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel);
+static uint8_t ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel, float *voltage);
 
 /* 应用层函数 */
 static void  App_SetState(AppState_t next);
 static void  App_OutputEnable(uint8_t on);
 static void  App_Buzzer(uint8_t on);
 static void  App_PlayStartupBeeps(void);
-static void  App_SampleVoltageGroup(void);
-static void  App_SampleCurrentGroup(void);
+static uint8_t App_SampleVoltageGroup(void);
+static uint8_t App_SampleCurrentGroup(void);
+static void  App_AdcFault(void);
+static float App_CalibrateCurrent(float raw, float scale, float offset);
 static void  App_SampleScheduler(void);
 static void  App_ScanKeys(void);
 static void  App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev);
@@ -280,8 +298,11 @@ int main(void)
   App_UpdateDisplay();                 /* 先显示 "Power Manager" + SELF TEST */
 
   /* ---- DAC1: PA4, 12 位, 参考 3.3V ---- */
-  (void)HAL_DAC_Start(&hdac1, DAC_CHANNEL_1);
-  /* 按理论传递关系开环预置到 8V 目标 (DAC ≈ 2.1V), 之后合闸过冲最小;
+  if (HAL_DAC_Start(&hdac1, DAC_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* 按理论传递关系开环预置到 8V 目标 (DAC ≈ 1.996V), 之后合闸过冲最小;
      实测后可修正 VOUT_DAC_A/B, 或等闭环接管 */
   App_DacSetVoltage(App_TargetToDac(VOUT_TARGET_DEFAULT));
 
@@ -294,18 +315,17 @@ int main(void)
   {
     Error_Handler();
   }
-  /* 先各采一组, 让显示与保护逻辑一上来就有有效数据 */
-  App_SampleVoltageGroup();
-  App_SampleCurrentGroup();
-  App_UpdateDisplay();
-
-  /* 开机蜂鸣 3 声, 每次间隔约 0.5s (题目 1.1), 之后进入待机 */
-  App_PlayStartupBeeps();
-  /* 蜂鸣期间输入/负载可能还在建立(上电涌流), 屏上是 2 秒多前的旧值;
-     进待机前重新采一轮并刷新, 避免初始画面停留在建立过程中的读数 */
-  App_SampleVoltageGroup();
-  App_SampleCurrentGroup();
-  App_SetState(APP_ST_STANDBY);
+  /* 采样失败保留 ADC 故障状态, 不把故障覆盖成待机. */
+  if ((App_SampleVoltageGroup() != 0U) && (App_SampleCurrentGroup() != 0U))
+  {
+    App_UpdateDisplay();
+    App_PlayStartupBeeps();
+    /* 蜂鸣后重新采集, 避免继续显示启动过程的旧读数. */
+    if ((App_SampleVoltageGroup() != 0U) && (App_SampleCurrentGroup() != 0U))
+    {
+      App_SetState(APP_ST_STANDBY);
+    }
+  }
   App_UpdateDisplay();
 /* USER CODE END 2 */
 
@@ -619,7 +639,18 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  /* 新图按键迁至 PB13/PB14/PB15; 与 .ioc 同步, 写在用户区以便重新生成保留.
+     旧生成区的 PA8/PB9/PB11 已不接按键, 将它们恢复为无上下拉模拟输入. */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = GPIO_PIN_9 | GPIO_PIN_11;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = KEY_UP_PIN | KEY_DOWN_PIN | KEY_FUNC_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(KEY_PORT, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -632,16 +663,20 @@ static void MX_GPIO_Init(void)
   *         G431 的 ADC 通道是单端/差分可选的, 这里固定用单端.
   * @param  hadc    : ADC 句柄, hadc1 或 hadc2
   * @param  channel : ADC 通道宏, 例如 ADC_CHANNEL_15
-  * @retval 电压值, 单位 V; 转换失败时返回 0.0f
+  * @param  voltage : 成功时写入 ADC 引脚电压 (V); 失败时不改旧值
+  * @retval 1=成功, 0=HAL 错误; 失败不能伪装成零电流
   */
-static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
+static uint8_t ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel, float *voltage)
 {
   ADC_ChannelConfTypeDef sConfig = {0};
   uint32_t sum = 0U;
   uint32_t i;
 
   /* 停止并关闭 ADC, 保证修改通道配置时 ADC 处于空闲状态 */
-  HAL_ADC_Stop(hadc);
+  if (HAL_ADC_Stop(hadc) != HAL_OK)
+  {
+    return 0U;
+  }
 
   /* 把目标通道配置到规则组的第 1 个转换 */
   sConfig.Channel = channel;
@@ -652,7 +687,7 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
   sConfig.Offset = 0U;
   if (HAL_ADC_ConfigChannel(hadc, &sConfig) != HAL_OK)
   {
-    return 0.0f;
+    return 0U;
   }
 
   /* 通道刚切换后的第一次转换会受采样保持电容残留电荷影响, 丢弃;
@@ -662,12 +697,12 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
     if (HAL_ADC_Start(hadc) != HAL_OK)
     {
       HAL_ADC_Stop(hadc);
-      return 0.0f;
+      return 0U;
     }
     if (HAL_ADC_PollForConversion(hadc, ADC_TIMEOUT_MS) != HAL_OK)
     {
       HAL_ADC_Stop(hadc);
-      return 0.0f;
+      return 0U;
     }
     if (i > 0U)                    /* 丢弃通道切换后的第一个样本 */
     {
@@ -675,10 +710,14 @@ static float ADC_ReadVoltage(ADC_HandleTypeDef *hadc, uint32_t channel)
     }
   }
 
-  HAL_ADC_Stop(hadc);
+  if (HAL_ADC_Stop(hadc) != HAL_OK)
+  {
+    return 0U;
+  }
 
   /* 12 位 ADC: V = 码值 / 4095 * VREF */
-  return ((float)sum / (float)ADC_OVERSAMPLING) * ADC_VREF / ADC_FULL_SCALE;
+  *voltage = ((float)sum / (float)ADC_OVERSAMPLING) * ADC_VREF / ADC_FULL_SCALE;
+  return 1U;
 }
 
 /* --------------------------------------------------------------------------
@@ -699,10 +738,11 @@ static float App_Clamp(float v, float lo, float hi)
 }
 
 /* 目标电压 -> DAC 输出电压. 理论关系 Vout ≈ VOUT_DAC_A - VOUT_DAC_B × V_DAC,
- * 反解并限幅到 [0, DAC_VMAX]; 实测后可修正 VOUT_DAC_A/B */
+ * 反解并限幅到缓冲模式输出范围 [0.2, 3.1]V; 实测后修正 A/B */
 static float App_TargetToDac(float vout)
 {
-  return App_Clamp((VOUT_DAC_A - vout) / VOUT_DAC_B, 0.0f, DAC_VMAX);
+  return App_Clamp((VOUT_DAC_A - vout) / VOUT_DAC_B,
+                   DAC_OUTPUT_MIN_V, DAC_OUTPUT_MAX_V);
 }
 
 /* DAC 电压 -> 12 位码值并写入 DAC1_OUT1 (PA4).
@@ -711,24 +751,22 @@ static void App_DacSetVoltage(float voltage)
 {
   float code;
 
-  if (!(voltage > 0.0f))
+  /* 负增益通路: 非有限值取高 DAC 电压以降低输出, 不要错误归零推高输出. */
+  if (!isfinite(voltage))
   {
-    (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 0U);
-    return;
+    voltage = DAC_OUTPUT_MAX_V;
   }
-  if (voltage >= DAC_VMAX)
-  {
-    (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
-                          (uint32_t)DAC_FULL_SCALE);
-    return;
-  }
+  voltage = App_Clamp(voltage, DAC_OUTPUT_MIN_V, DAC_OUTPUT_MAX_V);
 
   code = voltage * DAC_FULL_SCALE / DAC_VMAX + 0.5f;
   if (code >= DAC_FULL_SCALE)
   {
     code = DAC_FULL_SCALE;
   }
-  (void)HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)code);
+  if (HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)code) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /* 输出通断 MOS: PA1 高电平导通 */
@@ -759,18 +797,52 @@ static void App_PlayStartupBeeps(void)
 }
 
 /* 采电压组: 输入/输出电压. 真值 = ADC 引脚电压 × scale, 系数见文件头部 */
-static void App_SampleVoltageGroup(void)
+static uint8_t App_SampleVoltageGroup(void)
 {
-  measVin  = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_4) * VIN_ADC_SCALE;  /* PA7 */
-  measVout = ADC_ReadVoltage(&hadc2, ADC_CHANNEL_3) * VOUT_ADC_SCALE; /* PA6 */
+  float vin;
+  float vout;
+  if ((ADC_ReadVoltage(&hadc2, ADC_CHANNEL_4, &vin) == 0U) ||
+      (ADC_ReadVoltage(&hadc2, ADC_CHANNEL_3, &vout) == 0U))
+  {
+    App_AdcFault();
+    return 0U;
+  }
+  measVin = vin * VIN_ADC_SCALE;     /* PA7 */
+  measVout = vout * VOUT_ADC_SCALE;  /* PA6; 相对系统地, 非浮空负端 */
+  return 1U;
 }
 
 /* 采电流组: 输入/输出电流 */
-static void App_SampleCurrentGroup(void)
+static uint8_t App_SampleCurrentGroup(void)
 {
-  measIin  = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_12) * IIN_ADC_SCALE;  /* PB1 */
-  measIout = ADC_ReadVoltage(&hadc1, ADC_CHANNEL_15) * IOUT_ADC_SCALE; /* PB0 */
+  float iin;
+  float iout;
+  if ((ADC_ReadVoltage(&hadc1, ADC_CHANNEL_12, &iin) == 0U) ||
+      (ADC_ReadVoltage(&hadc1, ADC_CHANNEL_15, &iout) == 0U))
+  {
+    App_AdcFault();
+    return 0U;
+  }
+  measIin = App_CalibrateCurrent(iin, IIN_ADC_SCALE, IIN_OFFSET_A);
+  measIout = App_CalibrateCurrent(iout, IOUT_ADC_SCALE, IOUT_OFFSET_A);
   ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
+  return 1U;
+}
+
+static float App_CalibrateCurrent(float raw, float scale, float offset)
+{
+  float current = raw * scale + offset;
+  /* 单向测量: 负偏移修正后可出现小负值, 只在换算末端钳到 0A. */
+  return (current > 0.0f) ? current : 0.0f;
+}
+
+static void App_AdcFault(void)
+{
+  ioutFresh = 0U;
+  if (appState != APP_ST_PROT_ADC)
+  {
+    App_SetState(APP_ST_PROT_ADC);
+  }
 }
 
 /* 采样调度器: 每个循环拍消费一个"时隙".
@@ -812,6 +884,7 @@ static void App_SampleScheduler(void)
  * 短按在松手时产生; 长按在按住达到阈值时产生一次, 之后松手不再产生短按 */
 static void App_ScanKeys(void)
 {
+  uint32_t now = HAL_GetTick();
   uint8_t i;
 
   for (i = 0U; i < 3U; i++)
@@ -820,46 +893,31 @@ static void App_ScanKeys(void)
 
     keys[i].event = KEY_EV_NONE;
 
-    if (raw != keys[i].stable)
+    if (raw != keys[i].rawLast)
     {
-      if (keys[i].count < 0xFFU)
+      keys[i].rawLast = raw;
+      keys[i].changedAt = now;
+    }
+    /* 用真实毫秒数消抖/判长按, OLED 刷新和 ADC 耗时不计成固定 10ms. */
+    if ((raw != keys[i].stable) &&
+        ((uint32_t)(now - keys[i].changedAt) >= KEY_DEBOUNCE_MS))
+    {
+      keys[i].stable = raw;
+      if (raw == 0U)
       {
-        keys[i].count++;
+        keys[i].pressedAt = now;
+        keys[i].longFired = 0U;
       }
-      if (((uint32_t)keys[i].count * APP_LOOP_PERIOD_MS) >= KEY_DEBOUNCE_MS)
+      else if (keys[i].longFired == 0U)
       {
-        keys[i].stable = raw;
-        keys[i].count = 0U;
-        if (raw == 0U)                          /* 按下 */
-        {
-          keys[i].holdMs = 0U;
-          keys[i].longFired = 0U;
-        }
-        else if (keys[i].longFired == 0U)       /* 松手且没触发过长按 -> 短按 */
-        {
-          keys[i].event = KEY_EV_SHORT;
-        }
-        else
-        {
-          /* 长按已触发, 松手不产生事件 */
-        }
+        keys[i].event = KEY_EV_SHORT;
       }
     }
-    else
+    if ((raw == 0U) && (keys[i].stable == 0U) && (keys[i].longFired == 0U) &&
+        ((uint32_t)(now - keys[i].pressedAt) >= KEY_LONG_MS))
     {
-      keys[i].count = 0U;
-      if (keys[i].stable == 0U)                 /* 按住中: 累计时长判长按 */
-      {
-        if (keys[i].holdMs <= (0xFFFFU - APP_LOOP_PERIOD_MS))
-        {
-          keys[i].holdMs += APP_LOOP_PERIOD_MS;
-        }
-        if ((keys[i].longFired == 0U) && (keys[i].holdMs >= KEY_LONG_MS))
-        {
-          keys[i].longFired = 1U;
-          keys[i].event = KEY_EV_LONG;
-        }
-      }
+      keys[i].longFired = 1U;
+      keys[i].event = KEY_EV_LONG;
     }
   }
 }
@@ -962,6 +1020,17 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
       }
       break;
 
+    case APP_ST_PROT_ADC:
+      if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
+      {
+        /* 故障恢复后先回待机, 再次按键才合闸; 不能自动恢复功率输出. */
+        if ((App_SampleVoltageGroup() != 0U) && (App_SampleCurrentGroup() != 0U))
+        {
+          App_SetState(APP_ST_STANDBY);
+        }
+      }
+      break;
+
     default:
       break;
   }
@@ -970,6 +1039,20 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
 /* 状态切换入口: 统一处理"输出通断 / DAC 预置 / 报警 / 屏蔽期"等进入动作 */
 static void App_SetState(AppState_t next)
 {
+  /* 合闸前取得新测量, 不允许拿故障值或过时 Vin 开输出. */
+  if ((next == APP_ST_CV) || (next == APP_ST_CC))
+  {
+    if ((App_SampleVoltageGroup() == 0U) || (App_SampleCurrentGroup() == 0U))
+    {
+      return;  /* 采样函数已切到 ADC 故障并关断输出 */
+    }
+    if (measVin < UVP_TRIP_V)
+    {
+      stateBeforeProtect = next;
+      next = APP_ST_PROT_UVP;
+    }
+  }
+
   /* 离开运行模式时记下它, 供保护恢复用 */
   if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
   {
@@ -1018,6 +1101,7 @@ static void App_SetState(AppState_t next)
       break;
 
     case APP_ST_PROT_UVP:
+    case APP_ST_PROT_ADC:
       App_OutputEnable(0U);
       App_Buzzer(1U);
       break;
@@ -1037,12 +1121,17 @@ static void App_ControlStep(void)
 }
 
 /* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.
- * 合闸后 PROT_BLANK_MS 内不判保护, 避免浪涌误触发;
+ * 合闸后 PROT_BLANK_MS 内仅屏蔽过流, 欠压仍立即处理;
  * 过流只在新样本上判定, 需持续 OCP_CONFIRM_MS 才锁存, 负载瞬变/尖峰不会误触发 */
 static void App_ProtectionCheck(void)
 {
   if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
   {
+    if (measVin < UVP_TRIP_V)
+    {
+      App_SetState(APP_ST_PROT_UVP);
+      return;
+    }
     if ((int32_t)(HAL_GetTick() - protBlankUntil) < 0)
     {
       return;                                 /* 屏蔽期内 */
@@ -1071,11 +1160,6 @@ static void App_ProtectionCheck(void)
       }
     }
 
-    if (measVin < UVP_TRIP_V)
-    {
-      App_SetState(APP_ST_PROT_UVP);
-      return;
-    }
   }
   else if (appState == APP_ST_PROT_UVP)
   {
@@ -1100,6 +1184,7 @@ static char *App_StateText(AppState_t st)
     case APP_ST_CC:        return "CC MODE";
     case APP_ST_PROT_OCP:  return "OCP ALARM!";
     case APP_ST_PROT_UVP:  return "UVP ALARM!";
+    case APP_ST_PROT_ADC:  return "ADC FAULT!";
     default:               return "?";
   }
 }
@@ -1185,9 +1270,9 @@ static void App_UpdateDisplay(void)
   OLED_ShowFloatNum(OLED_VALUE_X, 16, dispVin, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
   OLED_ShowChar(OLED_UNIT_X, 16, 'V', OLED_FONT);
 
-  /* Vout 采样点在输出通断 MOS 内侧: 待机/保护时 MOS 断开, 输出端实际为 0V,
-     但变换器仍在工作, 采样点读到的是储能电压(约 8~10V).
-     非运行状态强制显示 0.00V, 避免"输出 0V 却显示 10V"的误判. */
+  /* PA6 采的是输出正端对系统地; Q3 在负端, 关断时负端浮空.
+     非运行状态的 0.00V 代表输出已禁用, 并非实测端子压差;
+     正端仍可能带电. 运行读数也包含 Q3 导通压降, 需与端子实测值复核. */
   voutDisp = ((appState == APP_ST_CV) || (appState == APP_ST_CC)) ? dispVout : 0.0f;
   OLED_ShowString(0, 24, "Vout", OLED_FONT);
   OLED_ShowFloatNum(OLED_VALUE_X, 24, voutDisp, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);
@@ -1220,6 +1305,7 @@ static void App_UpdateDisplay(void)
     case APP_ST_CC:        hint = "K1/K2=ADJ HOLD K3=CV"; break;
     case APP_ST_PROT_OCP:  hint = "K3=CLEAR"; break;
     case APP_ST_PROT_UVP:  hint = "K3=MUTE AUTO-RECOVER"; break;
+    case APP_ST_PROT_ADC:  hint = "K3=RETRY TO STANDBY"; break;
     default:               hint = ""; break;
   }
   OLED_ShowString(0, 56, hint, OLED_FONT);
@@ -1235,6 +1321,9 @@ static void App_UpdateDisplay(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+  /* HAL 初始化或 DAC 写入失败也应先断输出, 防止停在带电状态. */
+  App_OutputEnable(0U);
+  App_Buzzer(1U);
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)

@@ -2,6 +2,8 @@
 
 优利德杯 A 题 —— STM32G431CBT6（LQFP48）工程，CLion + CMake + STM32CubeMX（G4 HAL）。
 
+主程序及各测试文件的启动、循环、按键和故障处理流程，见 [主程序与测试流程 README](README_程序流程.md)。
+
 ## 当前实现
 
 - 上电：输出 MOS 保持关断（负端断开，正端仍可能带电），蜂鸣器响 3 声（间隔 0.5s），屏幕显示 "Power Manager" + 状态

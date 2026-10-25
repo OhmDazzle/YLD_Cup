@@ -1,4 +1,5 @@
-/* 独立模块测试共用板级初始化，不链接业务 main.c，不允许打开 PA1。 */
+/* 共用板级初始化，不链接业务 main.c；本文件始终不打开 PA1。
+ * 模块自检保持关断，独立整机调参固件由调用方显式管理 PA1。 */
 #include <math.h>
 #include "test_board.h"
 
@@ -189,7 +190,7 @@ bool TB_AdcRead(unsigned index, TB_AdcSample *sample)
       return false;
     }
     uint32_t code = HAL_ADC_GetValue(adc);
-    if (i != 0U) sum += code; /* 通道切换后弃首样，再平均 16 次。 */
+    if (i != 0U) sum += code; /* 通道切换后弃首样，再平均 TB_ADC_SAMPLES 次。 */
   }
   if (HAL_ADC_Stop(adc) != HAL_OK) return false;
   sample->code = (uint16_t)((sum + TB_ADC_SAMPLES / 2U) / TB_ADC_SAMPLES);

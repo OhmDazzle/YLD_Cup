@@ -1,6 +1,6 @@
 # 主程序与各测试文件流程
 
-本文按当前源代码说明六个固件入口、共用板级文件和两个主机验证脚本的执行流程。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)。
+本文说明七个固件入口、共用板级文件和三个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
 
 **当前主程序的 `App_ControlStep()` 仍为空：CV 按公式开环设置 DAC；CC 已有状态、目标值、采样调度和保护，但尚未实现恒流调节。屏幕显示 CV/CC 不代表闭环已经完成。**
 
@@ -14,10 +14,12 @@
 | [TEST_MODULES/opamp_test_main.c](TEST_MODULES/opamp_test_main.c) | `YLD_Cup_OpampTest` | 内部 DAC 与 OPA320 跟随器 | 始终关断 |
 | [TEST_MODULES/adc_test_main.c](TEST_MODULES/adc_test_main.c) | `YLD_Cup_ADCTest` | 四路原始采样及未标定换算 | 始终关断 |
 | [TEST/calib_main.c](TEST/calib_main.c) | `YLD_Cup_Calib` | 开环调压、手动通断与带载标定 | K3 手动切换 |
+| [TEST_PID/cc_pid_main.c](TEST_PID/cc_pid_main.c) | `YLD_Cup_CCPIDTune` | 独立恒流 PI/PID 实测调参、阶跃验证 | 按键启动，结束或故障关断 |
 | [tests/run_main_logic.py](tests/run_main_logic.py) | `python3 tests/run_main_logic.py` | 在电脑模拟主程序部分逻辑 | 不访问实物 |
 | [tests/run_module_logic.py](tests/run_module_logic.py) | `python3 tests/run_module_logic.py` | 在电脑模拟共用模块测试函数 | 不访问实物 |
+| [tests/run_cc_pid.py](tests/run_cc_pid.py) | `python3 tests/run_cc_pid.py` | 在电脑验证恒流识别、调节与保护逻辑 | 不访问实物 |
 
-六个固件各有自己的 `main()`，通过不同目标生成独立 ELF；每次烧录其中一个，板上只运行该程序。构建全部目标不会让它们在板上同时执行，切回主程序时需要重新烧录 `YLD_Cup.elf`。
+七个固件各有自己的 `main()`，通过不同目标生成独立 ELF；每次烧录其中一个，板上只运行该程序。构建全部目标不会让它们在板上同时执行，切回主程序时需要重新烧录 `YLD_Cup.elf`。
 
 ```sh
 cmake --preset Debug
@@ -27,9 +29,10 @@ cmake --build --preset Debug --target YLD_Cup_GPIOTest
 cmake --build --preset Debug --target YLD_Cup_OpampTest
 cmake --build --preset Debug --target YLD_Cup_ADCTest
 cmake --build --preset Debug --target YLD_Cup_Calib
+cmake --build --preset Debug --target YLD_Cup_CCPIDTune
 ```
 
-ELF 路径：主程序在 `build/Debug/`；屏幕、标定固件分别在其下的 `TEST_OLED/`、`TEST/`；三个新增模块固件在 `TEST_MODULES/`。CLion 的运行/调试配置选择相应 Target 后，通过 SWD 烧录。
+ELF 路径：主程序在 `build/Debug/`；屏幕、标定固件分别在其下的 `TEST_OLED/`、`TEST/`；三个模块固件在 `TEST_MODULES/`；恒流调参固件在 `TEST_PID/`。CLion 的运行/调试配置选择相应 Target 后，通过 SWD 烧录。
 
 ## 2. 公共硬件与数据流
 

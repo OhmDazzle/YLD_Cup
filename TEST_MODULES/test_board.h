@@ -9,7 +9,9 @@
 #define TB_K2 2U
 #define TB_K3 4U
 #define TB_VREF 3.3f
+#ifndef TB_ADC_SAMPLES
 #define TB_ADC_SAMPLES 16U
+#endif
 
 typedef struct {
   uint16_t code;

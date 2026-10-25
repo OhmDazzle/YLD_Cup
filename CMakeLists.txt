@@ -91,3 +91,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 add_subdirectory(TEST)
 add_subdirectory(TEST_OLED)
 add_subdirectory(TEST_MODULES)
+add_subdirectory(TEST_PID)

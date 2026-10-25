@@ -14,7 +14,7 @@ cmake --build --preset Debug --target YLD_Cup_CCPIDTune
 
 产物：`build/Debug/TEST_PID/YLD_Cup_CCPIDTune.elf`。烧回 `YLD_Cup` 可恢复原主固件。系数和波形只保存在 RAM，复位前记录结果。
 
-1. 先把电压、电流的**实测标定值**同步到 `cc_config.h`。`CC_IOUT_SCALE` 对应主程序的 `IOUT_GAIN_TRIM/(IOUT_SHUNT_OHM*INA199_GAIN)`，零偏用 `CC_IOUT_OFFSET`；输入电流同理。默认仍是理论值。
+1. V2.06 已与主程序共用 `Core/Inc/measurement_calibration.h` 的实测电流和输出电压换算，不再手动复制两点系数。换板或重标定时更新 `calibration/measurements_2026-10-25.json` 并运行拟合脚本，范围和限制见 [实测换算说明](../calibration/README.md)。Vin 仍为 D4 后节点；`cc_config.h` 保存调参限制与节拍。
 2. 使用已有的 PA4 DAC、PB0 输出电流、PA6/PA7 电压采样、PA1 输出 MOS，以及 PB15/PB14/PB13 三键和 OLED。接线顺序见资料目录的《代码复核与接线顺序》。Q3 切负端，仪器接地不能把输出负端直接并到系统地。
 3. 接限流的主输入电源，输入测量点需达到 13V，默认可沿用 16V 输入。采用功率电阻或电子负载 **CR 电阻模式**。不要用电子负载 CC 模式与本板恒流环互相调节。
 4. 默认测 1.0A、验证最高 1.1A；例如 10Ω 负载对应约 10～11V、10～12.1W，应选有足够散热余量的功率负载（如 25W 等级）。其他目标须按 `I*R`、`I²*R` 核对，本固件输出电压上限为 12V。不要接短路负载。

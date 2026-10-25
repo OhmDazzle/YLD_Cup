@@ -155,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix="yld-cc-test-") as directory:
     (path / "cases.c").write_text(CASES)
     subprocess.run([
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
-        "-I", str(ROOT / "TEST_PID"), str(path / "cases.c"),
+        "-I", str(ROOT / "TEST_PID"), "-I", str(ROOT / "Core/Inc"), str(path / "cases.c"),
         str(ROOT / "TEST_PID/cc_pid.c"), "-lm", "-o", str(path / "test")
     ], check=True)
     subprocess.run([str(path / "test")], check=True)

@@ -20,6 +20,7 @@ stub = r"""
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "measurement_calibration.h"
 typedef struct { uint16_t in, out; } GPIO_TypeDef;
 static GPIO_TypeDef ga = {0xffff, 0}, gb = {0xffff, 0};
 #define GPIOA (&ga)
@@ -87,14 +88,12 @@ static void sample_vin(float vin) {
 
 int main(void) {
   /* Real hardware transfer functions and calibration, including signed intercept. */
-  near(IIN_ADC_SCALE, 1.0f, 0.00001f);
-  near(IOUT_ADC_SCALE, 1.0f, 0.00001f);
   near(App_TargetToDac(5.0f), 2.6556f, 0.0001f);
   near(App_TargetToDac(8.0f), 1.9956f, 0.0001f);
   near(App_TargetToDac(15.0f), 0.4556f, 0.0001f);
   assert(App_TargetToDac(5.0f) > App_TargetToDac(15.0f));
-  near(App_CalibrateCurrent(0.21f, 1.02f, -0.0142f), 0.2f, 0.00001f);
-  near(App_CalibrateCurrent(0.0f, 1.0f, -0.015f), 0.0f, 0.00001f);
+  near(Cal_Iin(0.0f), 0.0f, 0.00001f);
+  near(Cal_Iout(0.0f), 0.0f, 0.00001f);
   App_DacSetVoltage(NAN); assert(dacCode == 3847);
   App_DacSetVoltage(INFINITY); assert(dacCode == 3847);
   App_DacSetVoltage(-1.0f); assert(dacCode == 248);
@@ -116,9 +115,17 @@ int main(void) {
   /* Fresh measurements before closing the switch, current scaling, ADC fault latch. */
   App_SetState(APP_ST_CV);
   assert(appState == APP_ST_CV && (ga.out & GPIO_PIN_1));
-  near(measIin, 1.0f, 0.001f);
+  near(measIin, Cal_Iin(1241.0f * ADC_VREF / ADC_FULL_SCALE), 0.00001f);
   codes[15]=2482;
-  assert(App_SampleCurrentGroup()); near(measIout,2.0f,0.001f);
+  assert(App_SampleCurrentGroup());
+  near(measIout, Cal_Iout(2482.0f * ADC_VREF / ADC_FULL_SCALE), 0.00001f);
+  near(measVout, Cal_Vout(measVoutNominal, measIout), 0.00001f);
+  float lastVout = measVout;
+  assert(App_SampleCurrentGroup()); near(measVout, lastVout, 0.00001f);
+  codes[15]=621; assert(App_SampleCurrentGroup());
+  assert(measVout > lastVout); /* New current refreshes cached terminal estimate. */
+  assert(App_SampleVoltageGroup());
+  near(measVout, Cal_Vout(measVoutNominal, measIout), 0.00001f);
   stage=4; assert(!App_SampleCurrentGroup());
   assert(appState == APP_ST_PROT_ADC && !(ga.out & GPIO_PIN_1));
   assert(ga.out & GPIO_PIN_2);
@@ -237,5 +244,5 @@ with tempfile.TemporaryDirectory(prefix="yld-main-test-") as directory:
     cfile = pathlib.Path(directory) / "main_logic.c"
     binary = pathlib.Path(directory) / "main_logic"
     cfile.write_text(stub + "\n".join(user_block(n) for n in ("PTD", "PD", "PV", "PFP", "4")) + cases)
-    subprocess.run(["cc", "-std=c11", str(cfile), "-o", str(binary)], check=True)
+    subprocess.run(["cc", "-std=c11", "-I", str(ROOT / "Core/Inc"), str(cfile), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

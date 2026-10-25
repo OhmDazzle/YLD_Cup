@@ -1,0 +1,70 @@
+{
+  "currents": {
+    "iin": {
+      "coefficients_q_k_b": [
+        -0.034945412,
+        0.999320076,
+        -0.001765326
+      ],
+      "upper_nominal_a": 1.27,
+      "before": {
+        "samples": 35,
+        "mae": 0.022028571428571432,
+        "max_abs": 0.05600000000000005,
+        "rmse": 0.027971924700109063
+      },
+      "after": {
+        "samples": 35,
+        "mae": 0.002848938929622853,
+        "max_abs": 0.013460975964799948,
+        "rmse": 0.00393802063972988
+      }
+    },
+    "iout": {
+      "coefficients_q_k_b": [
+        -0.019039246,
+        1.007293868,
+        -0.010019176
+      ],
+      "upper_nominal_a": 2.07,
+      "before": {
+        "samples": 35,
+        "mae": 0.030114285714285715,
+        "max_abs": 0.07899999999999996,
+        "rmse": 0.03714065927563175
+      },
+      "after": {
+        "samples": 35,
+        "mae": 0.003082195778914272,
+        "max_abs": 0.009596830654600041,
+        "rmse": 0.004003525299193824
+      }
+    }
+  },
+  "vout": {
+    "coefficients_voltage_current_offset": [
+      1.015199746,
+      -0.055152991,
+      -0.01640071
+    ],
+    "excluded_ids": {
+      "1": "输出电压原始值为 x",
+      "9": "测得输出电压为空",
+      "31": "测得输出电压原始值为 0.765，未确认，不改写"
+    },
+    "before": {
+      "samples": 32,
+      "mae": 0.05843750000000003,
+      "max_abs": 0.16000000000000014,
+      "rmse": 0.07467429276531518
+    },
+    "after": {
+      "samples": 32,
+      "mae": 0.003600927750696814,
+      "max_abs": 0.016003532687272504,
+      "rmse": 0.0048360785512846305
+    }
+  },
+  "vin": "No ADC calibration: reference is before D4, ADC is after D4.",
+  "scope": "In-sample residuals from rounded OLED readings; not independent hardware accuracy."
+}

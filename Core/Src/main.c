@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "OLED.h"
+#include "measurement_calibration.h"
 #include <math.h>
 /* USER CODE END Includes */
 
@@ -64,7 +65,7 @@ typedef struct
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /* ============================================================================
- * 应用层可调参数 —— 集中放在这里, 后期修改只动这一块
+ * 应用层运行参数集中在这里; 实测系数见 measurement_calibration.h
  * ==========================================================================*/
 
 /* ---- ADC 基础参数 ---- */
@@ -90,25 +91,13 @@ typedef struct
 #define CC_VOLT_SLOTS        1U    /* 恒流模式: 电压组时隙数 */
 #define CC_CURR_SLOTS        4U    /* 恒流模式: 电流组时隙数 */
 
-/* ---- 电压测量: 真值 = ADC 引脚电压 × scale ----
- * R4/R8=60kΩ, R2/R3=10kΩ, 理论分压比 7.0; 实测后各自标定. */
-#define VIN_ADC_SCALE        7.0f    /* PA7 = ADC2_IN4 (输入电压 ÷7 后进 ADC) */
-#define VOUT_ADC_SCALE       7.0f    /* PA6 = ADC2_IN3 (输出电压 ÷7 后进 ADC) */
-
-/* ---- 电流采样: I = raw × [GAIN_TRIM / (Rshunt × G)] + OFFSET_A ----
- * REF 继续接地, 不做上电自动归零 (输入空载仍有静态电流).
- * 用两个非零电流点拟合 k=(I2-I1)/(raw2-raw1), b=I1-k*raw1:
- * GAIN_TRIM=k*Rshunt*G, OFFSET_A=b. 两路独立标定; 这里不是实测值.
- * REF=0 时零点附近可能限幅, 标定需覆盖实际最低工作电流. */
-#define IIN_SHUNT_OHM        0.020f  /* 输入采样电阻 R6, Ω (20mΩ) */
-#define IOUT_SHUNT_OHM       0.020f  /* 输出采样电阻 R1, Ω (20mΩ) */
-#define INA199_GAIN          50.0f   /* INA199A1 增益 50 */
-#define IIN_GAIN_TRIM        1.0f
-#define IOUT_GAIN_TRIM       1.0f
-#define IIN_OFFSET_A         0.0f
-#define IOUT_OFFSET_A        0.0f
-#define IIN_ADC_SCALE        (IIN_GAIN_TRIM  / (IIN_SHUNT_OHM  * INA199_GAIN))
-#define IOUT_ADC_SCALE       (IOUT_GAIN_TRIM / (IOUT_SHUNT_OHM * INA199_GAIN))
+/* ---- V2.06 实测校准: 系数与函数统一在 measurement_calibration.h ----
+ * 电流: 20mΩ × INA199A1 50 倍的名义电流, 再做二次校正;
+ * 输出电压: 分压名义值 + 电流相关修正, 估算带载端子电压.
+ * 输入参考表接在 D4 前、PA7 接 D4 后, 不把二极管压降当 ADC 误差.
+ * 原始数据、拟合与范围见 calibration/README.md; 不做上电自动归零. */
+#define VIN_ADC_SCALE        CAL_VIN_ADC_SCALE
+#define VOUT_ADC_SCALE       CAL_VOUT_ADC_SCALE
 
 /* ---- DAC -> 输出电压传递关系 (Vout ≈ A - B × V_DAC, 实测后修正) ----
  * R10=10k / R13=2.2k / R11=1.2k, LM2596 Vfb 典型 1.23V:
@@ -205,6 +194,7 @@ static float targetI = IOUT_TARGET_DEFAULT;
 /* ---- 测量值 (已按标定系数换算) ---- */
 static float measVin  = 0.0f;
 static float measVout = 0.0f;
+static float measVoutNominal = 0.0f; /* PA6 名义电压, 避免电流刷新时重复校正 */
 static float measIin  = 0.0f;
 static float measIout = 0.0f;
 
@@ -241,7 +231,6 @@ static void  App_PlayStartupBeeps(void);
 static uint8_t App_SampleVoltageGroup(void);
 static uint8_t App_SampleCurrentGroup(void);
 static void  App_AdcFault(void);
-static float App_CalibrateCurrent(float raw, float scale, float offset);
 static void  App_SampleScheduler(void);
 static void  App_ScanKeys(void);
 static void  App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev);
@@ -800,7 +789,7 @@ static void App_PlayStartupBeeps(void)
   }
 }
 
-/* 采电压组: 输入/输出电压. 真值 = ADC 引脚电压 × scale, 系数见文件头部 */
+/* 采电压组: Vin 保留 D4 后采样; Vout 使用最新电流估算端子电压. */
 static uint8_t App_SampleVoltageGroup(void)
 {
   float vin;
@@ -812,7 +801,8 @@ static uint8_t App_SampleVoltageGroup(void)
     return 0U;
   }
   measVin = vin * VIN_ADC_SCALE;     /* PA7 */
-  measVout = vout * VOUT_ADC_SCALE;  /* PA6; 相对系统地, 非浮空负端 */
+  measVoutNominal = vout * VOUT_ADC_SCALE; /* PA6; 相对系统地 */
+  measVout = Cal_Vout(measVoutNominal, measIout);
   vinFresh = 1U;
   return 1U;
 }
@@ -828,17 +818,11 @@ static uint8_t App_SampleCurrentGroup(void)
     App_AdcFault();
     return 0U;
   }
-  measIin = App_CalibrateCurrent(iin, IIN_ADC_SCALE, IIN_OFFSET_A);
-  measIout = App_CalibrateCurrent(iout, IOUT_ADC_SCALE, IOUT_OFFSET_A);
+  measIin = Cal_Iin(iin);
+  measIout = Cal_Iout(iout);
+  measVout = Cal_Vout(measVoutNominal, measIout);
   ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
   return 1U;
-}
-
-static float App_CalibrateCurrent(float raw, float scale, float offset)
-{
-  float current = raw * scale + offset;
-  /* 单向测量: 负偏移修正后可出现小负值, 只在换算末端钳到 0A. */
-  return (current > 0.0f) ? current : 0.0f;
 }
 
 static void App_AdcFault(void)
@@ -1298,7 +1282,7 @@ static void App_UpdateDisplay(void)
 
   /* PA6 采的是输出正端对系统地; Q3 在负端, 关断时负端浮空.
      非运行状态的 0.00V 代表输出已禁用, 并非实测端子压差;
-     正端仍可能带电. 运行读数也包含 Q3 导通压降, 需与端子实测值复核. */
+     正端仍可能带电. 运行读数已按实测电流补偿为端子电压估计值. */
   voutDisp = ((appState == APP_ST_CV) || (appState == APP_ST_CC)) ? dispVout : 0.0f;
   OLED_ShowString(0, 24, "Vout", OLED_FONT);
   OLED_ShowFloatNum(OLED_VALUE_X, 24, voutDisp, OLED_FLOAT_INT_LEN, OLED_FLOAT_FRA_LEN, OLED_FONT);

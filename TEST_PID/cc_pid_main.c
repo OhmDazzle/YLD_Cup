@@ -31,10 +31,11 @@ static bool sample(CCMeasurement *m)
     /* HAL 正常但高端贴轨同样不能当正常测量继续调参。 */
     if (a[i].code >= 4090U) { m->valid = false; return false; }
   }
+  float iout = Cal_Iout(a[3].pin_v);
   *m = (CCMeasurement){
-    a[0].pin_v*CC_VIN_SCALE, a[1].pin_v*CC_VOUT_SCALE,
-    fmaxf(0.0f, a[2].pin_v*CC_IIN_SCALE + CC_IIN_OFFSET),
-    fmaxf(0.0f, a[3].pin_v*CC_IOUT_SCALE + CC_IOUT_OFFSET), true
+    a[0].pin_v*CC_VIN_SCALE,
+    Cal_Vout(a[1].pin_v*CC_VOUT_SCALE, iout),
+    Cal_Iin(a[2].pin_v), iout, true
   };
   return true;
 }

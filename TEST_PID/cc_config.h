@@ -1,13 +1,10 @@
 #ifndef CC_CONFIG_H
 #define CC_CONFIG_H
 
-/* 与 Core/Src/main.c 的实测标定值分别同步；以下仍是理论值。 */
-#define CC_VIN_SCALE        7.0f
-#define CC_VOUT_SCALE       7.0f
-#define CC_IIN_SCALE        1.0f /* GAIN_TRIM/(Rshunt*INA199_GAIN), A/V */
-#define CC_IOUT_SCALE       1.0f
-#define CC_IIN_OFFSET       0.0f
-#define CC_IOUT_OFFSET      0.0f
+/* 与主程序共用实测换算，避免调参时使用另一套电流读数。 */
+#include "measurement_calibration.h"
+#define CC_VIN_SCALE        CAL_VIN_ADC_SCALE
+#define CC_VOUT_SCALE       CAL_VOUT_ADC_SCALE
 #define CC_DAC_A            17.07091f
 #define CC_DAC_B            4.545455f
 

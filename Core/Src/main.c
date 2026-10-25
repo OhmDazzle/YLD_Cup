@@ -134,7 +134,8 @@ typedef struct
 /* ---- 保护阈值 (题目 2.1) ---- */
 #define OCP_TRIP_A           2.3f    /* Iout 超过 -> 过流保护 (手动解除) */
 #define OCP_CONFIRM_MS       50U     /* 过流需"持续"该时长才锁存保护, 防负载瞬变误触发 */
-#define UVP_TRIP_V           12.5f   /* Vin 低于 -> 欠压保护 (自动恢复) */
+#define UVP_TRIP_V           12.5f   /* Vin 持续低于 -> 欠压保护 (自动恢复) */
+#define UVP_CONFIRM_MS       3000U   /* 运行中欠压需连续确认 3 秒, 正常样本清零计时 */
 #define UVP_RECOVER_V        13.0f   /* Vin 回升到该值 -> 自动恢复 (留迟滞) */
 #define PROT_BLANK_MS        300U    /* 合闸后的过流屏蔽期; 欠压/ADC 故障不屏蔽 */
 
@@ -190,6 +191,9 @@ DAC_HandleTypeDef hdac1;
 static AppState_t appState = APP_ST_SELF_TEST;
 static AppState_t stateBeforeProtect = APP_ST_CV;  /* 保护前的运行模式, 恢复用 */
 static uint32_t   protBlankUntil = 0U;             /* 合闸屏蔽期截止时刻 */
+static uint8_t    vinFresh = 0U;                   /* 有新的电压采样 (供欠压确认窗口消费) */
+static uint8_t    uvpTracking = 0U;                /* 正在累计连续欠压时间 */
+static uint32_t   uvpSince = 0U;                   /* 本轮连续欠压的起始时刻 */
 static uint8_t    ioutFresh = 0U;                  /* 有新的电流采样 (供过流确认窗口消费) */
 static uint8_t    ocpTracking = 0U;                /* 正在累计过流持续时间 */
 static uint32_t   ocpSince = 0U;                   /* 本轮连续过流的起始时刻 */
@@ -809,6 +813,7 @@ static uint8_t App_SampleVoltageGroup(void)
   }
   measVin = vin * VIN_ADC_SCALE;     /* PA7 */
   measVout = vout * VOUT_ADC_SCALE;  /* PA6; 相对系统地, 非浮空负端 */
+  vinFresh = 1U;
   return 1U;
 }
 
@@ -1061,6 +1066,10 @@ static void App_SetState(AppState_t next)
 
   appState = next;
 
+  /* 状态切换后重新确认欠压, 不沿用上次运行的计时或合闸前样本. */
+  vinFresh = 0U;
+  uvpTracking = 0U;
+
   /* 状态切换后显示平均窗口重新起算, 避免上一状态的读数混进新状态 */
   dispHistFilled = 0U;
   dispHistIdx = 0U;
@@ -1121,16 +1130,33 @@ static void App_ControlStep(void)
 }
 
 /* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.
- * 合闸后 PROT_BLANK_MS 内仅屏蔽过流, 欠压仍立即处理;
+ * 运行中欠压按新电压样本连续确认 UVP_CONFIRM_MS, 正常样本清零计时;
+ * 合闸后 PROT_BLANK_MS 内仅屏蔽过流, 欠压确认照常计时;
  * 过流只在新样本上判定, 需持续 OCP_CONFIRM_MS 才锁存, 负载瞬变/尖峰不会误触发 */
 static void App_ProtectionCheck(void)
 {
   if ((appState == APP_ST_CV) || (appState == APP_ST_CC))
   {
-    if (measVin < UVP_TRIP_V)
+    if (vinFresh != 0U)
     {
-      App_SetState(APP_ST_PROT_UVP);
-      return;
+      vinFresh = 0U;
+      if (measVin < UVP_TRIP_V)
+      {
+        if (uvpTracking == 0U)
+        {
+          uvpTracking = 1U;
+          uvpSince = HAL_GetTick();
+        }
+        else if ((uint32_t)(HAL_GetTick() - uvpSince) >= UVP_CONFIRM_MS)
+        {
+          App_SetState(APP_ST_PROT_UVP);
+          return;
+        }
+      }
+      else
+      {
+        uvpTracking = 0U;
+      }
     }
     if ((int32_t)(HAL_GetTick() - protBlankUntil) < 0)
     {

@@ -79,6 +79,12 @@ static void near(float a, float b, float epsilon) { assert(fabsf(a-b) < epsilon)
 """
 
 cases = r"""
+static void sample_vin(float vin) {
+  codes[4] = (uint32_t)(vin / VIN_ADC_SCALE * ADC_FULL_SCALE / ADC_VREF + 0.5f);
+  assert(App_SampleVoltageGroup());
+  App_ProtectionCheck();
+}
+
 int main(void) {
   /* Real hardware transfer functions and calibration, including signed intercept. */
   near(IIN_ADC_SCALE, 1.0f, 0.00001f);
@@ -121,16 +127,85 @@ int main(void) {
   stage=0; App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
   assert(appState == APP_ST_STANDBY && !(ga.out & GPIO_PIN_1));
 
-  /* UVP prevents closing and also works during the OCP startup blanking window. */
+  /* UVP still prevents closing when the input is already below the threshold. */
   codes[4]=1773; App_SetState(APP_ST_CV);
   assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
   codes[4]=2836; assert(App_SampleVoltageGroup()); App_ProtectionCheck();
   assert(appState == APP_ST_CV && (ga.out & GPIO_PIN_1));
-  measVin=12.0f; App_ProtectionCheck();
+
+  /* CV and CC stay enabled until 3 seconds of sampled undervoltage, including
+     when confirmation starts at tick zero during the OCP blanking window. */
+  assert(UVP_CONFIRM_MS == 3000U);
+  for (unsigned mode=0; mode<2; mode++) {
+    tick=mode*10000U;
+    codes[4]=2836; App_SetState(mode ? APP_ST_CC : APP_ST_CV);
+    AppState_t running=appState;
+    sample_vin(12.0f);
+    assert(appState == running && (ga.out & GPIO_PIN_1));
+    assert(!(ga.out & GPIO_PIN_2));
+    tick+=2999U; sample_vin(12.0f);
+    assert(appState == running && (ga.out & GPIO_PIN_1));
+    tick++; App_ProtectionCheck(); /* No fresh sample must not confirm UVP. */
+    assert(appState == running);
+    sample_vin(12.0f);
+    assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2);
+    sample_vin(12.9f);
+    assert(appState == APP_ST_PROT_UVP);
+    sample_vin(13.1f);
+    assert(appState == running && (ga.out & GPIO_PIN_1));
+    assert(!(ga.out & GPIO_PIN_2));
+  }
+
+  /* A normal sample above 12.5V resets confirmation even below 13V recovery. */
+  tick=20000U; sample_vin(12.0f);
+  tick+=2999U; sample_vin(12.6f);
+  assert(appState == APP_ST_CC);
+  tick+=2U; sample_vin(12.0f);
+  assert(appState == APP_ST_CC);
+  tick+=2999U; sample_vin(12.0f);
+  assert(appState == APP_ST_CC);
+  tick++; sample_vin(12.0f);
+  assert(appState == APP_ST_PROT_UVP);
+
+  /* Standby and automatic recovery must not carry an earlier timer forward. */
+  sample_vin(16.0f);
+  sample_vin(12.0f);
+  tick+=2999U; sample_vin(12.0f);
+  assert(appState == APP_ST_CC);
+  App_SetState(APP_ST_STANDBY);
+  codes[4]=2836; App_SetState(APP_ST_CV);
+  sample_vin(12.0f);
+  tick++; sample_vin(12.0f);
+  assert(appState == APP_ST_CV);
+  tick+=2999U; sample_vin(12.0f);
+  assert(appState == APP_ST_PROT_UVP);
+
+  /* The 3-second elapsed-time check also works across the 32-bit tick wrap. */
+  tick=UINT32_MAX-1000U;
+  codes[4]=2836; App_SetState(APP_ST_CV);
+  sample_vin(12.0f);
+  tick+=2999U; sample_vin(12.0f);
+  assert(appState == APP_ST_CV);
+  tick++; sample_vin(12.0f);
   assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
 
+  /* ADC failure still shuts down immediately while UVP is being confirmed. */
+  codes[4]=2836; App_SetState(APP_ST_CV);
+  sample_vin(12.0f);
+  stage=4; assert(!App_SampleVoltageGroup());
+  assert(appState == APP_ST_PROT_ADC && !(ga.out & GPIO_PIN_1));
+  stage=0;
+
+  /* UVP confirmation does not delay an independent OCP trip. */
+  codes[4]=2836; App_SetState(APP_ST_CV); tick=protBlankUntil;
+  sample_vin(12.0f);
+  measIout=2.4f; ioutFresh=1; App_ProtectionCheck();
+  tick+=OCP_CONFIRM_MS; ioutFresh=1; App_ProtectionCheck();
+  assert(appState == APP_ST_PROT_OCP && !(ga.out & GPIO_PIN_1));
+
   /* OCP counts new samples only and a normal sample resets the confirmation. */
-  App_SetState(APP_ST_CV); tick=protBlankUntil;
+  codes[4]=2836; App_SetState(APP_ST_CV); tick=protBlankUntil;
   measIout=2.4f; ioutFresh=1; App_ProtectionCheck();
   tick+=100; App_ProtectionCheck(); assert(appState == APP_ST_CV);
   measIout=2.0f; ioutFresh=1; App_ProtectionCheck(); assert(!ocpTracking);

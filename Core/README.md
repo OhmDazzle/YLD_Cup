@@ -47,7 +47,8 @@
 | --- | --- | --- |
 | `VOUT_TARGET_DEFAULT / MIN / MAX / VOUT_STEP` | 8 / 5 / 15 / 1.0 | 步进调压默认值与范围（题目 2.2） |
 | `IOUT_TARGET_* / IOUT_STEP` | 1 / 0.2 / 2 / 0.1 | 恒流模式设定与步进 |
-| `OCP_TRIP_A` / `OCP_CONFIRM_MS` / `UVP_TRIP_V` / `UVP_RECOVER_V` | 2.3 / 50 / 12.5 / 13.0 | 过流阈值、过流确认窗口 (ms)、欠压阈值与恢复迟滞；欠压不屏蔽 |
+| `OCP_TRIP_A` / `OCP_CONFIRM_MS` | 2.3 A / 50 ms | 过流阈值与确认窗口 |
+| `UVP_TRIP_V` / `UVP_CONFIRM_MS` / `UVP_RECOVER_V` | 12.5 V / 3000 ms / 13.0 V | 运行中欠压连续确认3秒，正常电压样本清零；合闸前已欠压仍立即禁止输出并报警 |
 | `PROT_BLANK_MS` | 300 | 合闸后的过流屏蔽期；欠压和 ADC 故障不屏蔽 |
 | `APP_LOOP_PERIOD_MS` / `DISPLAY_REFRESH_MS` | 10 / 100 ms | 主循环节拍 / 屏幕刷新周期 |
 | `DISPLAY_AVG_TICKS` | 3 | 显示滑动平均窗口（3 × 100 ms = 300 ms，仅影响屏幕，保护用实时值） |

@@ -14,7 +14,7 @@
 | PV | 状态、设定值、测量值、按键对象、循环节拍 |
 | PFP | 函数原型；新增函数必须在这里声明 |
 | 2 | 上电流程：蜂鸣器 PWM 初始化（静音）→ OLED → 关输出 → DAC 预置 → ADC 校准 → 蜂鸣 3 声 → 待机 |
-| 3 | 主循环：按键 → 采样 → 控制 → 保护 → 显示 → 节拍延时（10 ms） |
+| 3 | 主循环：按键 → 采样 → 保护 → CV 前馈 → 显示 → 节拍延时（10 ms） |
 | 4 | 函数实现：`ADC_ReadVoltage()` + 全部 `App_*()` |
 
 ## 2. 可调参数速查（运行参数在 PD 区，实测系数在共享头文件）
@@ -32,7 +32,7 @@
 
 ### 2.2 实测换算
 
-V2.06 在 `Core/Inc/measurement_calibration.h` 统一保存系数及 `Cal_Iin()`、`Cal_Iout()`、`Cal_Vout()`，主程序与独立恒流调参固件共用。头文件由 `calibration/fit_measurements.py` 根据 35 组原记录生成；公式、范围和回代残差见 [实测换算说明](../calibration/README.md)。
+`measurement_calibration.h` 保存 V2.06 基础系数与测量函数，并引用 V2.08 的 `voltage_calibration.h` 对电压应用一次残差修正，主程序与独立恒流调参固件共用。两步 DAC 模型和 ADC trim 由 `calibration/fit_voltage_v2.py` 生成，基础系数由 `calibration/fit_measurements.py` 生成；范围和回代结果见 [电压校准说明](../calibration/voltage_v2_2026-10-27.md)。
 
 | 量 | 计算方式 | 测量口径 |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ V2.06 在 `Core/Inc/measurement_calibration.h` 统一保存系数及 `Cal_Iin()`
 | `DISPLAY_AVG_TICKS` | 3 | 显示滑动平均窗口（3 × 100 ms = 300 ms，仅影响屏幕，保护用实时值） |
 | `KEY_DEBOUNCE_MS` / `KEY_LONG_MS` | 20 / 800 ms | 按键消抖 / 长按判定 |
 | `BEEP_ON_MS / BEEP_GAP_MS / BEEP_STARTUP_TIMES` | 200 / 500 / 3 | 开机蜂鸣节奏 |
-| `VOUT_DAC_A / VOUT_DAC_B` | 17.07091 / 4.545455 | 目标电压 → DAC 传递关系（对应 R13=2.2k；方向：DAC↑ → Vout↓） |
+| DAC 校准 | `voltage_calibration.h` | 两步模型反解目标电压与电流；方向：DAC↑ → Vout↓ |
 | `DAC_FULL_SCALE` / `DAC_VMAX` | 4095 / 3.3 | G431 12 位 DAC 满量程与参考电压 |
 
 ## 3. 按键操作（与屏幕提示行一一对应）
@@ -70,14 +70,14 @@ V2.06 在 `Core/Inc/measurement_calibration.h` 统一保存系数及 `Cal_Iin()`
 - **加一个状态**：`AppState_t` 加枚举 → `App_SetState()` 的 switch 加“进入动作” → `App_HandleKeyEvent()` 加按键响应 → `App_StateText()` 加屏幕文案。
 - **改按键分工**：只动 `App_HandleKeyEvent()`。
 - **改主循环步骤**：`USER CODE 3` 里的 6 个步骤，按注释增删。
-- **实现 PID**：填 `App_ControlStep()`（函数头注释里写好了误差定义与负增益方向）。
+- **实现 PID**：在 `App_ControlStep()` 的 CV 静态前馈基础上设计电压闭环，并另行实现恒流控制；注意负增益方向。
 - **改屏幕布局**：`App_UpdateDisplay()` + PD 区的 `OLED_*` 布局宏。
-- **改 DAC 传递关系**：只改 `VOUT_DAC_A / VOUT_DAC_B`；硬件反馈网络变了才需要动。
+- **改 DAC 传递关系**：重新采集并运行 `calibration/fit_voltage_v2.py`；基础 A/B 必须与采集固件一致。
 - **改 ADC 通道**：电压组在 `App_SampleVoltageGroup()`，电流组在 `App_SampleCurrentGroup()`；同时确认 `.ioc` 里的引脚分配。
 
 ## 5. 注意事项
 
-1. `App_ControlStep()` 目前是占位——CV/CC 靠开环预置，不会精确闭环，属预期；接线与标定完成后再填 PID。
+1. `App_ControlStep()` 在 CV 下每拍按最新电流更新 DAC 静态前馈，不累计电压误差；主程序恒流仍无调节，电压和恒流 PID 均待实现。
 2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道，丢弃切换后的第一个样本，再做 4 次均值转换（640.5 周期采样，一个通道含弃样和均值至少约 150 µs），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
 3. 显示是整屏重绘（100 ms 一次）；以后若要改回局部刷新，注意 `OLED_UpdateArea()` 以页（8px）为粒度。
 4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单）。

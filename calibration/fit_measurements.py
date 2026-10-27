@@ -80,6 +80,8 @@ def header(result):
 #ifndef MEASUREMENT_CALIBRATION_H
 #define MEASUREMENT_CALIBRATION_H
 
+#include "voltage_calibration.h"
+
 #define CAL_VIN_ADC_SCALE 7.0f
 #define CAL_VOUT_ADC_SCALE 7.0f
 #define CAL_IIN_BASE_A_PER_V 1.0f
@@ -120,6 +122,8 @@ static inline float Cal_Vout(float nominal_v, float calibrated_iout)
 {
     float v = nominal_v * CAL_VOUT_K + calibrated_iout * CAL_VOUT_CURRENT_V_PER_A
               + CAL_VOUT_OFFSET_V;
+    /* V2.08 residual is fitted to V2.06/V2.07 displayed voltage, applied once. */
+    v += calibrated_iout * CAL_VOUT_TRIM_I + CAL_VOUT_TRIM_B;
     return (nominal_v > 0.0f && v > 0.0f) ? v : 0.0f;
 }
 #endif

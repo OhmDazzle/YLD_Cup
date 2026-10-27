@@ -1,8 +1,8 @@
 # 主程序与各测试文件流程
 
-本文说明七个固件入口、共用板级文件和四个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
+本文说明七个固件入口、共用板级文件和六个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
 
-**当前主程序的 `App_ControlStep()` 仍为空：CV 按公式开环设置 DAC；CC 已有状态、目标值、采样调度和保护，但尚未实现恒流调节。屏幕显示 CV/CC 不代表闭环已经完成。**
+**V2.08 的 `App_ControlStep()` 在 CV 下按最新电流更新 DAC 静态前馈；电压 PID 和主程序恒流 PID 尚未实现。屏幕显示 CV/CC 不代表闭环已经完成。校准公式见 [电压校准说明](calibration/voltage_v2_2026-10-27.md)。**
 
 ## 1. 文件、目标与运行方式
 
@@ -48,7 +48,7 @@ ELF 路径：主程序在 `build/Debug/`；屏幕、标定固件分别在其下�
 | OLED | PB3 / PB4 | 软件 I2C 的 SCL / SDA |
 | K1 / K2 / K3 | PB15 / PB14 / PB13 | 上拉输入，按下为低电平 |
 
-默认 ADC/DAC 基准按 3.3V 换算。调压采用 `Vout ≈ 17.07091 − 4.545455 × Vdac`，因此 DAC 电压升高会使输出降低；这只是理论关系，不保证所有输入及负载下都能达到设定值。
+默认 ADC/DAC 基准按 3.3V 换算。V2.08 先按两步实测模型反解原设定量 S，再用采集时的基础映射 `S = 17.07091 − 4.545455 × Vdac` 换算，因此 DAC 电压升高会使输出降低。数据范围与外推边界见电压校准说明。
 
 Q3 位于输出负端。关断只表示负端回路断开，正端仍可能带电。屏幕、GPIO、运放测试只接逻辑 5V，断开降压主输入与负载；ADC 和带载标定的分阶段接线见各自说明。
 
@@ -61,7 +61,7 @@ flowchart TD
     A[上电或复位] --> B[HAL 与 170MHz 系统时钟初始化]
     B --> C[依次初始化 GPIO、ADC2、DAC1、ADC1]
     C --> D[初始化 OLED，关闭 Q3 与蜂鸣器，显示 SELF TEST]
-    D --> E[启动 DAC，按 8V 目标预置约 1.996V]
+    D --> E[启动 DAC，按实测模型预置 8V 目标，电流初值为 0A]
     E --> F[ADC1 与 ADC2 自校准]
     F --> G{电压组与电流组采样成功？}
     G -->|是| H[刷新显示，蜂鸣三声]
@@ -84,8 +84,8 @@ flowchart TD
     A[读取当前毫秒计时] --> B[App_ScanKeys：消抖与短按/长按识别]
     B --> C[App_HandleKeyEvent：分发按键事件]
     C --> D[App_SampleScheduler：采一组电压或电流]
-    D --> E[App_ControlStep：当前为空，预留 PI/PID]
-    E --> F[App_ProtectionCheck：检查欠压与过流及恢复]
+    D --> E[App_ProtectionCheck：检查欠压与过流及恢复]
+    E --> F[App_ControlStep：CV 按最新电流更新 DAC 前馈]
     F --> G{距离上次显示达到 100ms？}
     G -->|是| H[App_UpdateDisplay：显示平均与刷屏]
     G -->|否| I[HAL_Delay 10ms]
@@ -93,7 +93,7 @@ flowchart TD
     I --> A
 ```
 
-循环末尾延时 10ms，加上 ADC、OLED 和其他处理耗时，实际循环周期大于 10ms且会变化。当前采样、控制占位、保护均由主循环调用，未使用固定周期控制定时器；实现 PI/PID 前应另行确定控制周期和新采样的使用方式。
+循环末尾延时 10ms，加上 ADC、OLED 和其他处理耗时，实际循环周期大于 10ms且会变化。当前采样、CV 前馈、保护均由主循环调用，未使用固定周期控制定时器；实现 PI/PID 前应另行确定控制周期和新采样的使用方式。
 
 ### 3.3 采样与显示
 
@@ -221,14 +221,15 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 
 该工具供仪器读数与原始采样比较，计算后由人将标定系数写回主程序，不自动拟合、保存或更新参数。它没有主程序的 OCP/UVP、ADC 故障锁存和 PI/PID，ADC 调用失败还可能显示0；不能据此认定无电压/电流。带载标定需由台架限流，方法见 [TEST/README.md](TEST/README.md)。
 
-## 7. 五个电脑端逻辑验证脚本
+## 7. 六个电脑端逻辑验证脚本
 
-这五个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
+这六个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
 
 | 脚本 | 执行流程 | 检查范围 |
 | --- | --- | --- |
 | `run_main_logic.py` | 读取 `main.c` 用户区 → 拼接模拟 HAL 和断言 → 在临时目录用本机 `cc` 编译 → 运行测试 → 自动清理 | 标定换算、DAC限幅、ADC失败、状态切换、欠压/过流、按键短长按及计时回绕 |
-| `run_measurement_calibration.py` | 将原记录送入固件共享 C 换算函数 | 35 组电流、32 组电压回代，零值、ADC 全量程单调性、上限衔接及过流余量 |
+| `run_measurement_calibration.py` | 将原记录送入固件共享 C 换算函数 | 35 组历史电流回代，零值、ADC 全量程单调性、上限衔接及过流余量 |
+| `run_voltage_calibration.py` | 将 V2 两页数据送入实际 C 换算函数 | 20 组 ADC 回代、20 组 DAC 锚点与量化、量程单调性和边界连续性 |
 | `run_module_logic.py` | 读取 `test_board.h/.c` 并提取实际函数 → 拼接模拟 HAL → 用本机 `cc` 严格编译 → 执行断言 → 自动清理 | 六档DAC码及异常输入、ADC通道映射/弃样/均值/错误返回、按键消抖及回绕、蜂鸣器开关请求 |
 | `run_buzzer_logic.py` | 编译实际 `buzzer.c`，模拟时钟、GPIO 和定时器寄存器 | 载波频率/占空比、上电静音、APB 分频倍频、重复开关不重启载波及无效时钟 |
 | `run_cc_pid.py` | 用模拟电源模型和故障样本调用实际恒流调参算法 | 自动识别、阶跃验证、时序、控制方向、抗积分饱和与故障锁存 |
@@ -236,6 +237,7 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 ```sh
 python3 tests/run_main_logic.py
 python3 tests/run_measurement_calibration.py
+python3 tests/run_voltage_calibration.py
 python3 tests/run_module_logic.py
 python3 tests/run_cc_pid.py
 python3 tests/run_buzzer_logic.py

@@ -1,0 +1,96 @@
+{
+  "version": "V2.08",
+  "dac": {
+    "first_pass": [
+      {
+        "current_a": 0.5,
+        "k": 1.009,
+        "b_v": -0.354
+      },
+      {
+        "current_a": 1.0,
+        "k": 1.01,
+        "b_v": -0.43
+      },
+      {
+        "current_a": 1.5,
+        "k": 1.007,
+        "b_v": -0.474
+      },
+      {
+        "current_a": 2.0,
+        "k": 1.005,
+        "b_v": -0.513
+      }
+    ],
+    "second_pass": {
+      "k_current": -0.003,
+      "k_offset": 1.0115,
+      "b_current": -0.1042,
+      "b_offset_v": -0.3125
+    },
+    "command_range_v": [
+      5.0,
+      9.0
+    ],
+    "current_range_a": [
+      0.5,
+      2.0
+    ],
+    "before": {
+      "samples": 20,
+      "mae": 0.38850000000000007,
+      "max_abs": 0.4900000000000002,
+      "rmse": 0.3949398688408149
+    },
+    "forward_residual": {
+      "samples": 20,
+      "mae": 0.004060000000000352,
+      "max_abs": 0.007899999999999352,
+      "rmse": 0.004588027898782117
+    },
+    "inverse_with_12bit_dac_residual": {
+      "samples": 20,
+      "mae": 0.004393320086336772,
+      "max_abs": 0.007494911265569115,
+      "rmse": 0.004832615842673584
+    },
+    "extension": "Outside 5..9 V, hold the calibration increment at the voltage boundary; current is bounded to 0..2 A, with 0..0.5 A extrapolated."
+  },
+  "adc": {
+    "residual_current_v_per_a": -0.003348423,
+    "residual_offset_v": 0.021567519,
+    "before": {
+      "samples": 20,
+      "mae": 0.01805000000000003,
+      "max_abs": 0.023000000000000576,
+      "rmse": 0.018350749303502598
+    },
+    "after": {
+      "samples": 20,
+      "mae": 0.001974036501500187,
+      "max_abs": 0.005875199900000183,
+      "rmse": 0.0026880557763151606
+    },
+    "reference_range_v": [
+      7.521,
+      7.81
+    ],
+    "current_range_a": [
+      0.1,
+      2.0
+    ],
+    "reason": "Single-setpoint load sweep does not identify independent voltage gain and current drop; retain the V2.06 voltage gain and trim the residual."
+  },
+  "corrections": [
+    {
+      "page": 1,
+      "test_id": 20,
+      "column": "测得输出电压",
+      "original": "0.751",
+      "corrected": "7.51",
+      "reason": "User confirmed decimal transcription error on 2026-10-27."
+    }
+  ],
+  "scope": "In-sample/model residuals from rounded readings, not post-flash hardware accuracy. Second-page data describe terminal output, not measured PA4 voltage."
+}

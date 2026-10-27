@@ -14,5 +14,8 @@ cmake-build-*/
 *.obj
 *.d
 
+# Python calibration/test imports
+__pycache__/
+
 # macOS
 .DS_Store

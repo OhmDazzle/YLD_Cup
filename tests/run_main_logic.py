@@ -91,10 +91,12 @@ static void sample_vin(float vin) {
 
 int main(void) {
   /* Real hardware transfer functions and calibration, including signed intercept. */
-  near(App_TargetToDac(5.0f), 2.6556f, 0.0001f);
-  near(App_TargetToDac(8.0f), 1.9956f, 0.0001f);
-  near(App_TargetToDac(15.0f), 0.4556f, 0.0001f);
+  near(App_TargetToDac(5.0f), 2.6000f, 0.0002f);
+  near(App_TargetToDac(8.0f), 1.9477f, 0.0002f);
+  near(App_TargetToDac(15.0f), 0.4101f, 0.0002f);
   assert(App_TargetToDac(5.0f) > App_TargetToDac(15.0f));
+  App_DacSetVoltage(App_TargetToDac(NAN)); assert(dacCode==3847);
+  measIout=NAN; near(App_TargetToDac(8),DAC_OUTPUT_MAX_V,0.00001f); measIout=0;
   near(Cal_Iin(0.0f), 0.0f, 0.00001f);
   near(Cal_Iout(0.0f), 0.0f, 0.00001f);
   App_DacSetVoltage(NAN); assert(dacCode == 3847);
@@ -118,6 +120,14 @@ int main(void) {
   /* Fresh measurements before closing the switch, current scaling, ADC fault latch. */
   App_SetState(APP_ST_CV);
   assert(appState == APP_ST_CV && (ga.out & GPIO_PIN_1));
+  float dac_unloaded=App_TargetToDac(targetV);
+  measIout=2.0f; App_ControlStep();
+  assert(dacCode<(unsigned)(dac_unloaded*4095/3.3f+0.5f));
+  unsigned cv_code=dacCode;
+  appState=APP_ST_CC; measIout=0; App_ControlStep(); assert(dacCode==cv_code);
+  appState=APP_ST_STANDBY; App_ControlStep(); assert(dacCode==cv_code);
+  appState=APP_ST_PROT_ADC; App_ControlStep(); assert(dacCode==cv_code);
+  appState=APP_ST_CV;
   near(measIin, Cal_Iin(1241.0f * ADC_VREF / ADC_FULL_SCALE), 0.00001f);
   codes[15]=2482;
   assert(App_SampleCurrentGroup());

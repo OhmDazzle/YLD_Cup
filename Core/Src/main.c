@@ -92,7 +92,7 @@ typedef struct
 #define CC_VOLT_SLOTS        1U    /* 恒流模式: 电压组时隙数 */
 #define CC_CURR_SLOTS        4U    /* 恒流模式: 电流组时隙数 */
 
-/* ---- V2.06 实测校准: 系数与函数统一在 measurement_calibration.h ----
+/* ---- V2.08 实测校准: 系数与函数统一在 measurement_calibration.h ----
  * 电流: 20mΩ × INA199A1 50 倍的名义电流, 再做二次校正;
  * 输出电压: 分压名义值 + 电流相关修正, 估算带载端子电压.
  * 输入参考表接在 D4 前、PA7 接 D4 后, 不把二极管压降当 ADC 误差.
@@ -100,12 +100,8 @@ typedef struct
 #define VIN_ADC_SCALE        CAL_VIN_ADC_SCALE
 #define VOUT_ADC_SCALE       CAL_VOUT_ADC_SCALE
 
-/* ---- DAC -> 输出电压传递关系 (Vout ≈ A - B × V_DAC, 实测后修正) ----
- * R10=10k / R13=2.2k / R11=1.2k, LM2596 Vfb 典型 1.23V:
- * A=1.23*(1+10/1.2+10/2.2), B=10/2.2. 实测后再修正.
- * 这是反馈设定范围, 不保证 16V 输入时功率级能带载输出 15V. */
-#define VOUT_DAC_A           17.07091f
-#define VOUT_DAC_B           4.545455f
+/* ---- DAC: 第二页两步拟合反解见 voltage_calibration.h ----
+ * 负载电流用于恒压前馈; 这不是电压 PID, 不保证功率级带载能力. */
 #define DAC_VMAX             3.3f    /* DAC 参考电压, 用于码值换算 */
 #define DAC_OUTPUT_MIN_V     0.2f    /* 缓冲开启后的规定输出范围 */
 #define DAC_OUTPUT_MAX_V     (DAC_VMAX - 0.2f)
@@ -300,8 +296,7 @@ int main(void)
   {
     Error_Handler();
   }
-  /* 按理论传递关系开环预置到 8V 目标 (DAC ≈ 1.996V), 之后合闸过冲最小;
-     实测后可修正 VOUT_DAC_A/B, 或等闭环接管 */
+  /* 按实测模型预置 8V; 开机尚无负载电流, 先按 0A 外推值设置. */
   App_DacSetVoltage(App_TargetToDac(VOUT_TARGET_DEFAULT));
 
   /* ADC 校准: 上电后各执行一次, 可消除内部电容误差, 提高转换精度 */
@@ -349,11 +344,11 @@ int main(void)
     /* 2. 采样调度: 按当前模式的"电压/电流时间占比"轮流采两组信号 */
     App_SampleScheduler();
 
-    /* 3. 闭环控制 (占位): 后续 PID 在这里实现 */
-    App_ControlStep();
-
-    /* 4. 保护检查: 过流 / 欠压 + 欠压自动恢复 (题目 2.1) */
+    /* 3. 先检查保护, 再允许本拍的恒压前馈更新 DAC */
     App_ProtectionCheck();
+
+    /* 4. 恒压电流前馈; 电压/恒流 PID 仍待实现 */
+    App_ControlStep();
 
     /* 5. 显示刷新 (固定周期, 不用每拍都刷) */
     if ((now - lastDisplayTick) >= DISPLAY_REFRESH_MS)
@@ -735,11 +730,11 @@ static float App_Clamp(float v, float lo, float hi)
   return v;
 }
 
-/* 目标电压 -> DAC 输出电压. 理论关系 Vout ≈ VOUT_DAC_A - VOUT_DAC_B × V_DAC,
- * 反解并限幅到缓冲模式输出范围 [0.2, 3.1]V; 实测后修正 A/B */
+/* 目标端子电压 + 最新校正电流 -> 两步模型反解 -> PA4 DAC 电压. */
 static float App_TargetToDac(float vout)
 {
-  return App_Clamp((VOUT_DAC_A - vout) / VOUT_DAC_B,
+  if (!isfinite(vout) || !isfinite(measIout)) return DAC_OUTPUT_MAX_V;
+  return App_Clamp(Cal_TargetToDac(vout, measIout),
                    DAC_OUTPUT_MIN_V, DAC_OUTPUT_MAX_V);
 }
 
@@ -1109,13 +1104,15 @@ static void App_SetState(AppState_t next)
   }
 }
 
-/* 闭环控制: 框架占位, PID 下一版实现.
- * 恒压: 误差 = targetV - measVout;  恒流: 误差 = targetI - measIout;
- * 都作用在同一条 DAC 通路上, 注意增益方向为负 (DAC 电压升高 -> 输出降低).
- * 建议: 每拍限幅小步长, 配合 App_SetState 的开环预置, 避免合闸/恢复过冲 */
+/* 恒压每拍按最新电流更新静态前馈, 不累计电压误差.
+ * 保护检查在本函数之前执行, 不复用其消费的 ioutFresh 标志.
+ * 恒流 PID 仍待实现; 独立恒流调参固件直接控制 DAC, 不叠加 CV 前馈. */
 static void App_ControlStep(void)
 {
-  /* TODO: PID 闭环 */
+  if (appState == APP_ST_CV)
+  {
+    App_DacSetVoltage(App_TargetToDac(targetV));
+  }
 }
 
 /* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.

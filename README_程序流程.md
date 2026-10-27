@@ -1,14 +1,14 @@
 # 主程序与各测试文件流程
 
-本文说明七个固件入口、共用板级文件和七个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
+本文说明七个固件入口、共用板级文件和八个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
 
-**V2.11 的 `App_ControlStep()` 在 CV 下执行两步前馈与慢速积分电压闭环，见 [自动纠偏说明](calibration/cv_feedback_2026-10-27.md)。主程序 CC 仍无恒流调节；独立调参固件另行实现恒流 PI/PID。**
+**V2.13 的 `App_ControlStep()` 在 CV 下执行两步前馈与慢速积分电压闭环，见 [自动纠偏说明](calibration/cv_feedback_2026-10-27.md)；CC 下按新电流样本执行快慢档积分环，见 [恒流控制说明](calibration/cc_feedback_2026-10-27.md)。独立调参固件另行实现恒流 PI/PID。**
 
 ## 1. 文件、目标与运行方式
 
 | 文件 | CMake Target / 运行命令 | 用途 | PA1 / Q3 |
 | --- | --- | --- | --- |
-| [Core/Src/main.c](Core/Src/main.c) | `YLD_Cup` | 整机状态机、采样、开环调压、显示与保护 | 运行态导通，待机/保护关断 |
+| [Core/Src/main.c](Core/Src/main.c) | `YLD_Cup` | 整机状态机、采样、恒压/恒流闭环、显示与保护 | 运行态导通，待机/保护关断 |
 | [TEST_OLED/oled_test_main.c](TEST_OLED/oled_test_main.c) | `YLD_Cup_OLEDTest` | 六页屏幕测试 | 始终关断 |
 | [TEST_MODULES/gpio_test_main.c](TEST_MODULES/gpio_test_main.c) | `YLD_Cup_GPIOTest` | 按键状态、计数和蜂鸣器 | 始终关断 |
 | [TEST_MODULES/opamp_test_main.c](TEST_MODULES/opamp_test_main.c) | `YLD_Cup_OpampTest` | 内部 DAC 与 OPA320 跟随器 | 始终关断 |
@@ -85,7 +85,7 @@ flowchart TD
     B --> C[App_HandleKeyEvent：分发按键事件]
     C --> D[App_SampleScheduler：采一组电压或电流]
     D --> E[App_ProtectionCheck：检查欠压与过流及恢复]
-    E --> F[App_ControlStep：CV 前馈及新电压样本驱动的慢速纠偏]
+    E --> F[App_ControlStep：CV 前馈纠偏 / CC 新电流样本快慢调节]
     F --> G{距离上次显示达到 100ms？}
     G -->|是| H[App_UpdateDisplay：显示平均与刷屏]
     G -->|否| I[HAL_Delay 10ms]
@@ -93,7 +93,7 @@ flowchart TD
     I --> A
 ```
 
-循环末尾延时 10ms，加上 ADC、OLED 和其他处理耗时，实际循环周期大于 10ms且会变化。当前采样、CV 控制、保护均由主循环调用。慢速纠偏只在新电压样本且达到 100ms 间隔时更新，按实际经过时间积分；超过 500ms 则重建滤波而不补积历史误差。该外环用于慢漂，快速动态控制仍需台架整定。
+循环末尾延时 10ms，加上 ADC、OLED 和其他处理耗时，实际循环周期大于 10ms且会变化。当前采样、CV/CC 控制、保护均由主循环调用。CC 以实际新电流样本间隔更新，首样本或间隔超过 250ms 只重建滤波。慢速纠偏只在新电压样本且达到 100ms 间隔时更新，按实际经过时间积分；超过 500ms 则重建滤波而不补积历史误差。该外环用于慢漂，快速动态控制仍需台架整定。
 
 ### 3.3 采样与显示
 
@@ -111,7 +111,7 @@ V2.06 中 Vin 按分压比换算，表示 D4 后节点；电流在名义 1A/V �
 | --- | --- | --- | --- | --- |
 | STANDBY | 无动作 | 请求进入 CV | 无动作 | Q3 关断、停止报警 |
 | CV | 目标电压 ±1V，范围 5～15V，同步更新 DAC | 回待机 | 切 CC | 按目标预置 DAC，再开 Q3 |
-| CC | 目标电流 ±0.1A，范围 0.2～2.0A | 回待机 | 切 CV | 保持现有 DAC，开 Q3；尚无恒流调节 |
+| CC | 目标电流 ±0.1A，范围 0.2～2.0A | 回待机 | 切 CV | 运行中切换跟踪当前 DAC，保护恢复先置低输出档，再按新电流样本快慢调节 |
 | OCP | 无动作 | 尝试恢复保护前模式 | 无动作 | Q3 关断并报警 |
 | UVP | 无动作 | 暂时静音 | 无动作 | Q3 关断并报警 |
 | ADC FAULT | 无动作 | 重采两组，成功后回待机 | 无动作 | Q3 关断并报警 |
@@ -221,9 +221,9 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 
 该工具供仪器读数与原始采样比较，计算后由人将标定系数写回主程序，不自动拟合、保存或更新参数。它没有主程序的 OCP/UVP、ADC 故障锁存和 PI/PID，ADC 调用失败还可能显示0；不能据此认定无电压/电流。带载标定需由台架限流，方法见 [TEST/README.md](TEST/README.md)。
 
-## 7. 七个电脑端逻辑验证脚本
+## 7. 八个电脑端逻辑验证脚本
 
-这七个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
+这八个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
 
 | 脚本 | 执行流程 | 检查范围 |
 | --- | --- | --- |
@@ -231,6 +231,7 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 | `run_measurement_calibration.py` | 将原记录送入固件共享 C 换算函数 | 35 组历史电流回代，零值、ADC 全量程单调性、上限衔接及过流余量 |
 | `run_voltage_calibration.py` | 将 V2 两页数据送入实际 C 换算函数 | 20 组 ADC 回代、20 组 DAC 锚点与量化、量程单调性和边界连续性 |
 | `run_cv_regulation.py` | 调用实际主程序控制、采样和保护函数，模拟带载慢漂 | 调节方向、新样本、计时回绕、死区/限速/限幅、抗饱和、重置与保护优先 |
+| `run_cc_regulation.py` | 调用主程序恒流、采样和保护函数，运行带时延、量化及循环抖动的合成负载 | 快慢档/死区、目标升降、负载变化、电压上限、抗饱和、状态切换与保护优先 |
 | `run_module_logic.py` | 读取 `test_board.h/.c` 并提取实际函数 → 拼接模拟 HAL → 用本机 `cc` 严格编译 → 执行断言 → 自动清理 | 六档DAC码及异常输入、ADC通道映射/弃样/均值/错误返回、按键消抖及回绕、蜂鸣器开关请求 |
 | `run_buzzer_logic.py` | 编译实际 `buzzer.c`，模拟时钟、GPIO 和定时器寄存器 | 载波频率/占空比、上电静音、APB 分频倍频、重复开关不重启载波及无效时钟 |
 | `run_cc_pid.py` | 用模拟电源模型和故障样本调用实际恒流调参算法 | 自动识别、阶跃验证、时序、控制方向、抗积分饱和与故障锁存 |
@@ -238,6 +239,7 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 ```sh
 python3 tests/run_main_logic.py
 python3 tests/run_cv_regulation.py
+python3 tests/run_cc_regulation.py
 python3 tests/run_measurement_calibration.py
 python3 tests/run_voltage_calibration.py
 python3 tests/run_module_logic.py
@@ -249,4 +251,4 @@ python3 tests/run_buzzer_logic.py
 
 ## 8. 建议阅读与上板顺序
 
-先看本文的文件表和公共硬件，再按 `OLED → GPIO → DAC/运放 → ADC → 带载标定 → 主程序状态与保护` 的顺序验证。每次记录烧录目标、供电/负载、命令值和仪器实测值。完成静态链路和标定后，再安排专用小阶跃采集、固定控制周期及 PI/PID 实现；当前文件中没有自动 PID 整定程序。
+先看本文的文件表和公共硬件，再按 `OLED → GPIO → DAC/运放 → ADC → 带载标定 → 主程序状态与保护` 的顺序验证。每次记录烧录目标、供电/负载、命令值和仪器实测值。完成静态链路和标定后，用主程序验证恒流快慢档参数；需要实测识别 PI/PID 初值时使用独立 `TEST_PID` 固件，其结果需单独评估后移植。

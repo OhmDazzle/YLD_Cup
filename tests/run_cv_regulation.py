@@ -14,8 +14,8 @@ static void reset_cv(void) {
 static void feedback(float voltage, uint32_t dt, int fresh_current) {
     tick+=dt;
     measVout=voltage;
-    cvVoltageSampleTick=tick; cvVoltageFresh=1;
-    if (fresh_current) cvCurrentSampleTick=tick;
+    voltageSampleTick=tick; cvVoltageFresh=1;
+    if (fresh_current) currentSampleTick=tick;
     App_ControlStep();
 }
 

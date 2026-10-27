@@ -14,7 +14,7 @@
 | PV | 状态、设定值、测量值、按键对象、循环节拍 |
 | PFP | 函数原型；新增函数必须在这里声明 |
 | 2 | 上电流程：蜂鸣器 PWM 初始化（静音）→ OLED → 关输出 → DAC 预置 → ADC 校准 → 蜂鸣 3 声 → 待机 |
-| 3 | 主循环：按键 → 采样 → 保护 → CV 前馈与慢速积分纠偏 → 显示 → 节拍延时（10 ms） |
+| 3 | 主循环：按键 → 采样 → 保护 → CV 前馈与慢速积分纠偏 / CC 快慢调节 → 显示 → 节拍延时（10 ms） |
 | 4 | 函数实现：`ADC_ReadVoltage()` + 全部 `App_*()` |
 
 ## 2. 可调参数速查（运行参数在 PD 区，实测系数在共享头文件）
@@ -48,6 +48,10 @@
 | --- | --- | --- |
 | `VOUT_TARGET_DEFAULT / MIN / MAX / VOUT_STEP` | 8 / 5 / 15 / 1.0 | 步进调压默认值与范围（题目 2.2） |
 | `IOUT_TARGET_* / IOUT_STEP` | 1 / 0.2 / 2 / 0.1 | 恒流模式设定与步进 |
+| `CC_FAST_KI / CC_FINE_KI` | 0.8 / 0.3 | 恒流快调 / 微调增益，DAC V/(A·s) |
+| `CC_FAST_RATE_V_S / CC_FINE_RATE_V_S` | 0.5 / 0.03 | 恒流 DAC 变化率上限，V/s |
+| `CC_FINE_ENTER_A / CC_FINE_EXIT_A / CC_DEADBAND_A` | 0.03 / 0.08 / 0.005 | 快慢档迟滞与电流死区，A |
+| `CC_VOLTAGE_LIMIT_V` | 15V | 恒流输出电压上限，与 CV 当前设定独立 |
 | `OCP_TRIP_A` / `OCP_CONFIRM_MS` | 2.3 A / 50 ms | 过流阈值与确认窗口 |
 | `UVP_TRIP_V` / `UVP_CONFIRM_MS` / `UVP_RECOVER_V` | 12.5 V / 3000 ms / 13.0 V | 运行中欠压连续确认3秒，正常电压样本清零；合闸前已欠压仍立即禁止输出并报警 |
 | `PROT_BLANK_MS` | 300 | 合闸后的过流屏蔽期；欠压和 ADC 故障不屏蔽 |
@@ -70,14 +74,14 @@
 - **加一个状态**：`AppState_t` 加枚举 → `App_SetState()` 的 switch 加“进入动作” → `App_HandleKeyEvent()` 加按键响应 → `App_StateText()` 加屏幕文案。
 - **改按键分工**：只动 `App_HandleKeyEvent()`。
 - **改主循环步骤**：`USER CODE 3` 里的 6 个步骤，按注释增删。
-- **调电压环**：`App_ControlStep()` 已有慢速积分外环；调整 `CV_TRIM_*` 前先看 [自动纠偏说明](../calibration/cv_feedback_2026-10-27.md)，主程序恒流控制仍需另行实现。
+- **调电压环**：`App_ControlStep()` 已有慢速积分外环；调整 `CV_TRIM_*` 前先看 [自动纠偏说明](../calibration/cv_feedback_2026-10-27.md)，恒流改 `App_CcControlStep()` 与 `CC_*`，见 [恒流控制说明](../calibration/cc_feedback_2026-10-27.md)。
 - **改屏幕布局**：`App_UpdateDisplay()` + PD 区的 `OLED_*` 布局宏。
 - **改 DAC 传递关系**：重新采集并运行 `calibration/fit_voltage_v2.py`；基础 A/B 必须与采集固件一致。
 - **改 ADC 通道**：电压组在 `App_SampleVoltageGroup()`，电流组在 `App_SampleCurrentGroup()`；同时确认 `.ioc` 里的引脚分配。
 
 ## 5. 注意事项
 
-1. `App_ControlStep()` 在 CV 下应用两步前馈并按新电压样本慢速积分纠偏。参数、限幅、新样本判定、重置及验证见 [自动纠偏说明](../calibration/cv_feedback_2026-10-27.md)；主程序恒流仍无调节。
+1. `App_ControlStep()` 在 CV 下应用两步前馈并按新电压样本慢速积分纠偏。参数、限幅、新样本判定、重置及验证见 [自动纠偏说明](../calibration/cv_feedback_2026-10-27.md)；CC 分支按新电流样本执行快慢档积分环，见 [恒流控制说明](../calibration/cc_feedback_2026-10-27.md)。
 2. `ADC_ReadVoltage()` 每次调用都会重配 ADC 通道，丢弃切换后的第一个样本，再做 4 次均值转换（640.5 周期采样，一个通道含弃样和均值至少约 150 µs），不要放进中断；采样节奏交给 `App_SampleScheduler()`。
 3. 显示是整屏重绘（100 ms 一次）；以后若要改回局部刷新，注意 `OLED_UpdateArea()` 以页（8px）为粒度。
 4. 生成区（`MX_*_Init()`、`SystemClock_Config()`）不要手改；要改参数先改 `.ioc` 再生成（流程见根 README 安全清单）。

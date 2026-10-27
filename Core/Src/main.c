@@ -107,14 +107,14 @@ typedef struct
 #define DAC_OUTPUT_MAX_V     (DAC_VMAX - 0.2f)
 #define DAC_FULL_SCALE       4095.0f /* G431 12 位 DAC 满量程码值 */
 
-/* ---- V2.10 恒压慢速纠偏: 只调整 DAC 偏置, 不改写拟合/ADC 系数 ----
+/* ---- V2.11 恒压小死区纠偏: 只调整 DAC 偏置, 不改写拟合/ADC 系数 ----
  * 负增益通路: Vout 偏低 -> DAC 偏置减小. 仅消费新电压样本,
  * 实际经过时间积分, 带死区、偏置/斜率限幅和抗积分饱和. */
 #define CV_TRIM_PERIOD_MS    100U
 #define CV_TRIM_SETTLE_MS    400U   /* 合闸或改目标后先等输出稳定 */
 #define CV_TRIM_MAX_GAP_MS   500U   /* 长间隔只重建滤波, 不补积历史误差 */
 #define CV_TRIM_FILTER_S     0.5f
-#define CV_TRIM_DEADBAND_V   0.010f
+#define CV_TRIM_DEADBAND_V   0.003f /* 3mV: 小幅掉压也开始纠偏 */
 #define CV_TRIM_KI           0.020f /* DAC V / (输出误差 V * s) */
 #define CV_TRIM_RATE_V_S     0.005f /* 仅慢速偏置的变化率, DAC V/s */
 #define CV_TRIM_MAX_DAC_V    0.100f /* 相对实测前馈的最大 DAC 偏置 */

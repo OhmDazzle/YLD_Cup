@@ -84,8 +84,19 @@ int main(void) {
     near(cvTrimDacV,saved,0.000001f);
     assert(!cvVoltageFresh);
     prime(8.1f); feedback(8.1f,100,1); assert(cvTrimDacV>0);
-    prime(8.005f);
-    for (unsigned n=0; n<50; ++n) feedback(8.005f,100,1);
+    /* Both signs of a 2mV deviation stay inside the new 3mV deadband. */
+    for (unsigned sign=0; sign<2; ++sign) {
+        float v=8.0f+(sign ? 0.002f : -0.002f);
+        prime(v);
+        for (unsigned n=0; n<50; ++n) feedback(v,100,1);
+        assert(cvTrimDacV==0);
+    }
+    /* A 5mV error used to be ignored; now either direction must correct it. */
+    prime(7.995f); feedback(7.995f,100,1); assert(cvTrimDacV<0);
+    prime(8.005f); feedback(8.005f,100,1); assert(cvTrimDacV>0);
+    /* Alternating ADC-scale ripple is rejected by the existing voltage filter. */
+    prime(8.0f);
+    for (unsigned n=0; n<500; ++n) feedback(8.0f+(n%2 ? 0.005f : -0.005f),100,1);
     assert(cvTrimDacV==0);
 
     /* Equal real elapsed times yield the same correction despite loop jitter. */

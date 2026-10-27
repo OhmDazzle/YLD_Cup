@@ -2,7 +2,7 @@
 
 本文说明七个固件入口、共用板级文件和七个主机验证脚本。详细测量接线见 [模块测试说明](TEST_MODULES/README.md)，标定公式见 [标定说明](TEST/README.md)，恒流自动识别、阶跃及手动试参流程见 [恒流调参说明](TEST_PID/README.md)。
 
-**V2.10 的 `App_ControlStep()` 在 CV 下执行两步前馈与慢速积分电压闭环，见 [自动纠偏说明](calibration/cv_feedback_2026-10-27.md)。主程序 CC 仍无恒流调节；独立调参固件另行实现恒流 PI/PID。**
+**V2.11 的 `App_ControlStep()` 在 CV 下执行两步前馈与慢速积分电压闭环，见 [自动纠偏说明](calibration/cv_feedback_2026-10-27.md)。主程序 CC 仍无恒流调节；独立调参固件另行实现恒流 PI/PID。**
 
 ## 1. 文件、目标与运行方式
 

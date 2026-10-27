@@ -37,7 +37,7 @@ typedef enum
   APP_ST_CV,              /* 恒压模式 */
   APP_ST_CC,              /* 恒流模式 */
   APP_ST_PROT_OCP,        /* 过流保护: 关输出 + 报警, 手动解除 */
-  APP_ST_PROT_UVP,        /* 欠压保护: 关输出 + 报警, 自动恢复 */
+  APP_ST_PROT_UVP,        /* 欠压保护: 关输出 + 报警, 手动忽略后恢复 */
   APP_ST_PROT_ADC,        /* 采样故障: 关输出 + 报警, 手动重试后回待机 */
 } AppState_t;
 
@@ -150,9 +150,9 @@ typedef struct
 /* ---- 保护阈值 (题目 2.1) ---- */
 #define OCP_TRIP_A           2.3f    /* Iout 超过 -> 过流保护 (手动解除) */
 #define OCP_CONFIRM_MS       50U     /* 过流需"持续"该时长才锁存保护, 防负载瞬变误触发 */
-#define UVP_TRIP_V           12.5f   /* Vin 持续低于 -> 欠压保护 (自动恢复) */
+#define UVP_TRIP_V           12.5f   /* Vin 持续低于 -> 欠压保护 (手动忽略) */
 #define UVP_CONFIRM_MS       3000U   /* 运行中欠压需连续确认 3 秒, 正常样本清零计时 */
-#define UVP_RECOVER_V        13.0f   /* Vin 回升到该值 -> 自动恢复 (留迟滞) */
+#define UVP_RECOVER_V        13.0f   /* 新样本达到该值 -> 结束忽略, 重新启用欠压保护 */
 #define PROT_BLANK_MS        300U    /* 合闸后的过流屏蔽期; 欠压/ADC 故障不屏蔽 */
 
 /* ---- 时序 ---- */
@@ -210,6 +210,7 @@ static uint32_t   protBlankUntil = 0U;             /* 合闸屏蔽期截止时�
 static uint8_t    vinFresh = 0U;                   /* 有新的电压采样 (供欠压确认窗口消费) */
 static uint8_t    uvpTracking = 0U;                /* 正在累计连续欠压时间 */
 static uint32_t   uvpSince = 0U;                   /* 本轮连续欠压的起始时刻 */
+static uint8_t    uvpIgnored = 0U;                 /* 忽略本次欠压, 新样本恢复到 13V 才清除 */
 static uint8_t    ioutFresh = 0U;                  /* 有新的电流采样 (供过流确认窗口消费) */
 static uint8_t    ocpTracking = 0U;                /* 正在累计过流持续时间 */
 static uint32_t   ocpSince = 0U;                   /* 本轮连续过流的起始时刻 */
@@ -856,6 +857,11 @@ static uint8_t App_SampleVoltageGroup(void)
     return 0U;
   }
   measVin = vin * VIN_ADC_SCALE;     /* PA7 */
+  /* 只用成功的新电压样本结束忽略; 待机、模式切换及其他保护均不清除此标志. */
+  if (measVin >= UVP_RECOVER_V)
+  {
+    uvpIgnored = 0U;
+  }
   measVoutNominal = vout * VOUT_ADC_SCALE; /* PA6; 相对系统地 */
   measVout = Cal_Vout(measVoutNominal, measIout);
   voltageSampleTick = HAL_GetTick();
@@ -974,8 +980,8 @@ static void App_ScanKeys(void)
  *   待机:      K3 短按 -> 进入恒压 (待机 <-> 恒压 的双向切换键, 题目 1.2)
  *   恒压运行:  K1/K2 短按 -> 目标 ±1V;  K3 短按 -> 回待机;  K3 长按 -> 切恒流
  *   恒流运行:  K1/K2 短按 -> 目标 ±0.1A; K3 短按 -> 回待机; K3 长按 -> 切恒压
- *   过流保护:  K3 短按 -> 解除, 回保护前模式 (输入仍欠压则转欠压保护, 题目 2.1)
- *   欠压保护:  K3 短按 -> 暂时静音; 输入恢复正常后自动回保护前模式
+ *   过流保护:  K3 短按 -> 解除, 回保护前模式 (合闸前统一检查采样及未忽略的欠压)
+ *   欠压保护:  K3 短按 -> 忽略并回保护前模式; Vin 恢复到 13V 前不重复欠压告警
  * TODO: K1/K2 长按连发 (快速调节), 后续再加 */
 static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
 {
@@ -1054,21 +1060,15 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
     case APP_ST_PROT_OCP:
       if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
       {
-        if (measVin < UVP_TRIP_V)
-        {
-          App_SetState(APP_ST_PROT_UVP);        /* 输入还欠压, 先转欠压保护 */
-        }
-        else
-        {
-          App_SetState(stateBeforeProtect);     /* 手动解除, 恢复正常工作 */
-        }
+        App_SetState(stateBeforeProtect);       /* 合闸前统一采样及检查保护 */
       }
       break;
 
     case APP_ST_PROT_UVP:
       if ((idx == KEY_IDX_FUNC) && (ev == KEY_EV_SHORT))
       {
-        App_Buzzer(0U);                         /* 暂时消音, 恢复逻辑照常 */
+        uvpIgnored = 1U;                        /* 本次欠压只告警一次, 正常样本重新使能 */
+        App_SetState(stateBeforeProtect);       /* 手动忽略后恢复输出, ADC 故障仍可阻止合闸 */
       }
       break;
 
@@ -1099,7 +1099,7 @@ static void App_SetState(AppState_t next)
     {
       return;  /* 采样函数已切到 ADC 故障并关断输出 */
     }
-    if (measVin < UVP_TRIP_V)
+    if ((uvpIgnored == 0U) && (measVin < UVP_TRIP_V))
     {
       stateBeforeProtect = next;
       next = APP_ST_PROT_UVP;
@@ -1322,7 +1322,7 @@ static void App_ProtectionCheck(void)
     if (vinFresh != 0U)
     {
       vinFresh = 0U;
-      if (measVin < UVP_TRIP_V)
+      if ((uvpIgnored == 0U) && (measVin < UVP_TRIP_V))
       {
         if (uvpTracking == 0U)
         {
@@ -1369,16 +1369,9 @@ static void App_ProtectionCheck(void)
     }
 
   }
-  else if (appState == APP_ST_PROT_UVP)
-  {
-    if (measVin >= UVP_RECOVER_V)
-    {
-      App_SetState(stateBeforeProtect);       /* 输入恢复 -> 自动回到保护前模式 */
-    }
-  }
   else
   {
-    /* 待机 / 过流保护: 不需要自动动作 */
+    /* 待机及保护状态不自动合闸; 欠压即使恢复正常也等待 K3 短按确认. */
   }
 }
 
@@ -1512,7 +1505,7 @@ static void App_UpdateDisplay(void)
     case APP_ST_CV:        hint = "K1/K2=ADJ HOLD K3=CC"; break;
     case APP_ST_CC:        hint = "K1/K2=ADJ HOLD K3=CV"; break;
     case APP_ST_PROT_OCP:  hint = "K3=CLEAR"; break;
-    case APP_ST_PROT_UVP:  hint = "K3=MUTE AUTO-RECOVER"; break;
+    case APP_ST_PROT_UVP:  hint = "K3=IGNORE"; break;
     case APP_ST_PROT_ADC:  hint = "K3=RETRY TO STANDBY"; break;
     default:               hint = ""; break;
   }

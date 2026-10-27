@@ -151,7 +151,13 @@ int main(void) {
   codes[4]=1773; App_SetState(APP_ST_CV);
   assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
   codes[4]=2836; assert(App_SampleVoltageGroup()); App_ProtectionCheck();
+  assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+  App_HandleKeyEvent(KEY_IDX_UP, KEY_EV_SHORT);
+  App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_LONG);
+  assert(appState == APP_ST_PROT_UVP && (ga.out & GPIO_PIN_2));
+  App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
   assert(appState == APP_ST_CV && (ga.out & GPIO_PIN_1));
+  assert(!uvpIgnored && !(ga.out & GPIO_PIN_2));
 
   /* CV and CC stay enabled until 3 seconds of sampled undervoltage, including
      when confirmation starts at tick zero during the OCP blanking window. */
@@ -173,8 +179,11 @@ int main(void) {
     sample_vin(12.9f);
     assert(appState == APP_ST_PROT_UVP);
     sample_vin(13.1f);
+    assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2); /* Normal voltage must not close the output. */
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
     assert(appState == running && (ga.out & GPIO_PIN_1));
-    assert(!(ga.out & GPIO_PIN_2));
+    assert(!uvpIgnored && !(ga.out & GPIO_PIN_2));
   }
 
   /* A normal sample above 12.5V resets confirmation even below 13V recovery. */
@@ -188,8 +197,10 @@ int main(void) {
   tick++; sample_vin(12.0f);
   assert(appState == APP_ST_PROT_UVP);
 
-  /* Standby and automatic recovery must not carry an earlier timer forward. */
+  /* Standby and manual recovery must not carry an earlier timer forward. */
   sample_vin(16.0f);
+  assert(appState == APP_ST_PROT_UVP);
+  App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
   sample_vin(12.0f);
   tick+=2999U; sample_vin(12.0f);
   assert(appState == APP_ST_CC);
@@ -233,6 +244,76 @@ int main(void) {
   tick+=49; ioutFresh=1; App_ProtectionCheck(); assert(appState == APP_ST_CV);
   tick++; ioutFresh=1; App_ProtectionCheck();
   assert(appState == APP_ST_PROT_OCP && !(ga.out & GPIO_PIN_1));
+  sample_vin(12.0f); App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+  assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+
+  /* Ignoring UVP restores the original CV/CC mode, once per low-voltage episode.
+     Standby, mode changes, OCP and ADC faults must preserve that acknowledgement. */
+  for (unsigned mode=0; mode<2; mode++) {
+    codes[4]=2836; codes[15]=0;
+    App_SetState(mode ? APP_ST_CC : APP_ST_CV);
+    AppState_t running=appState;
+    sample_vin(12.0f);
+    tick+=UVP_CONFIRM_MS; sample_vin(12.0f);
+    assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2);
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == running && (ga.out & GPIO_PIN_1));
+    assert(uvpIgnored && !uvpTracking && !(ga.out & GPIO_PIN_2));
+    tick+=UVP_CONFIRM_MS*2U; sample_vin(12.0f);
+    assert(appState == running && !uvpTracking);
+    sample_vin(12.9f);
+    assert(uvpIgnored); /* The 12.5V trip threshold does not re-arm protection. */
+    measVin=13.1f; App_ProtectionCheck();
+    assert(uvpIgnored); /* Only a successfully sampled voltage can re-arm it. */
+    sample_vin(12.0f);
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_STANDBY && uvpIgnored && !(ga.out & GPIO_PIN_1));
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_CV && uvpIgnored && (ga.out & GPIO_PIN_1));
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_LONG);
+    assert(appState == APP_ST_CC && uvpIgnored && (ga.out & GPIO_PIN_1));
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_LONG);
+    assert(appState == APP_ST_CV && uvpIgnored && (ga.out & GPIO_PIN_1));
+
+    tick=protBlankUntil;
+    measIout=2.4f; ioutFresh=1; App_ProtectionCheck();
+    tick+=OCP_CONFIRM_MS; ioutFresh=1; App_ProtectionCheck();
+    assert(appState == APP_ST_PROT_OCP && uvpIgnored && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2);
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_CV && uvpIgnored && (ga.out & GPIO_PIN_1));
+    assert(!(ga.out & GPIO_PIN_2));
+
+    stage=4; assert(!App_SampleVoltageGroup());
+    assert(appState == APP_ST_PROT_ADC && uvpIgnored && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2);
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_PROT_ADC && !(ga.out & GPIO_PIN_1));
+    stage=0; App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_STANDBY && uvpIgnored);
+    App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+    assert(appState == APP_ST_CV && uvpIgnored && (ga.out & GPIO_PIN_1));
+
+    /* Recovery re-arms the next episode with a fresh 3-second confirmation. */
+    sample_vin(13.1f); assert(!uvpIgnored && !uvpTracking);
+    sample_vin(12.0f);
+    tick+=UVP_CONFIRM_MS-1U; sample_vin(12.0f);
+    assert(appState == APP_ST_CV && (ga.out & GPIO_PIN_1));
+    tick++; sample_vin(12.0f);
+    assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
+    assert(ga.out & GPIO_PIN_2);
+  }
+
+  /* A failed pre-enable ADC read must also prevent an ignored UVP from closing. */
+  stage=4; App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+  assert(appState == APP_ST_PROT_ADC && uvpIgnored && !(ga.out & GPIO_PIN_1));
+  stage=0; App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+  assert(appState == APP_ST_STANDBY && uvpIgnored);
+  sample_vin(13.1f);
+  assert(appState == APP_ST_STANDBY && !uvpIgnored && !(ga.out & GPIO_PIN_1));
+  sample_vin(12.0f); App_HandleKeyEvent(KEY_IDX_FUNC, KEY_EV_SHORT);
+  assert(appState == APP_ST_PROT_UVP && !(ga.out & GPIO_PIN_1));
 
   /* PB13 short/long events use elapsed time, including tick wraparound. */
   assert(keys[0].port == GPIOB && keys[0].pin == GPIO_PIN_15);

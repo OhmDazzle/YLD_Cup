@@ -44,7 +44,7 @@ ELF 路径：主程序在 `build/Debug/`；屏幕、标定固件分别在其下�
 | Iout | PB0 / ADC1_IN15 | 输出 INA199 输出；20mΩ、50 倍增益时名义 1A/V |
 | DAC | PA4 / DAC1_OUT1 | 经 OPA320、R13 注入 LM2596 FB |
 | 输出控制 | PA1 | 高电平使 Q3 导通 |
-| 蜂鸣器控制 | PA2 | 高电平使蜂鸣器开关管导通 |
+| 蜂鸣器控制 | PA2 / AF1 / TIM2_CH3 | 约 2.4kHz、50% 占空比 PWM 驱动 Q2，低电平静音 |
 | OLED | PB3 / PB4 | 软件 I2C 的 SCL / SDA |
 | K1 / K2 / K3 | PB15 / PB14 / PB13 | 上拉输入，按下为低电平 |
 
@@ -75,7 +75,7 @@ flowchart TD
 
 初始化、自校准或 DAC 调用失败会进入 `Error_Handler()`：关 Q3、开报警、关中断并停机，不进入正常主循环。运行采样失败则进入可按 K3 重试的 `ADC FAULT` 状态，两种错误处理不同。
 
-开机蜂鸣每声 200ms，随后停 500ms，共三次。该阶段使用阻塞延时，Q3 保持关断；蜂鸣结束后重新采样，避免直接沿用启动前的旧读数。
+开机蜂鸣每声 200ms，随后停 500ms，共三次。`Buzzer_Init()` 在 GPIO/ADC/DAC 初始化后、OLED 初始化前启动静音 PWM；`App_Buzzer()` 通过共用驱动切换占空比。该阶段使用阻塞延时，硬件 TIM2 持续产生载波，Q3 保持关断；蜂鸣结束后重新采样，避免直接沿用启动前的旧读数。TIM2 不使用中断，进入主程序 Error_Handler 关中断后也能持续报警。
 
 ### 3.2 主循环顺序
 
@@ -129,7 +129,7 @@ V2.06 中 Vin 按分压比换算，表示 D4 后节点；电流在名义 1A/V �
 
 ## 4. 屏幕测试 `TEST_OLED/oled_test_main.c`
 
-**启动：** `HAL_Init → 系统时钟 → GPIO → 蜂鸣器关 → OLED 初始化 → 全白400ms → 全黑200ms → 初始化翻页/动画计时`。不初始化 ADC/DAC，Q3 始终关闭。
+**启动：** `HAL_Init → 系统时钟 → GPIO → 蜂鸣器 PWM 初始化（静音）→ OLED 初始化 → 全白400ms → 全黑200ms → 初始化翻页/动画计时`。不初始化 ADC/DAC，Q3 始终关闭。
 
 ```mermaid
 flowchart TD
@@ -155,13 +155,13 @@ flowchart TD
 
 | 函数 | 执行流程 |
 | --- | --- |
-| `TB_Init()` | HAL 初始化 → 使能 GPIO 时钟 → PA1/PA2 拉低并设为输出 → 采样/DAC 引脚设模拟模式 → 三键设上拉 → 配置 170MHz 系统时钟 |
+| `TB_Init()` | HAL 初始化 → 使能 GPIO 时钟 → PA1/PA2 拉低并设为输出 → 采样/DAC 引脚设模拟模式 → 三键设上拉 → 配置 170MHz 系统时钟 → 蜂鸣器 PWM 初始化（静音） |
 | `TB_KeysPoll()` | 读取原始按下状态 → 20ms 消抖 → 返回本次按下事件位 → 更新原始/稳定状态及心跳 |
 | `TB_DacInit()` | 初始化 DAC、配置通道 → 预装目标码值 → 启动 DAC |
 | `TB_DacWrite()` | 电压限制到 0.2～3.1V → 四舍五入换算 12 位码 → HAL 写入 → 更新调试变量；非有限输入回退到 3.0V |
 | `TB_AdcInit()` | 初始化 ADC1 → 独立模式配置 → 初始化 ADC2 → 分别自校准 |
 | `TB_AdcRead()` | 校验参数 → 停止 ADC → 配置通道 → 17次转换，弃首样再平均16次 → 更新码值、电压和有效标志 |
-| `TB_Buzzer()` | 根据布尔参数设置 PA2 高/低 |
+| `TB_Buzzer()` | 调用共用 `Buzzer_Set()`，切换 PA2 PWM 发声/低电平静音 |
 
 这里的按键事件在**确认按下时**产生，按住不连发，也没有长按功能。与主程序、OLED 测试的“松手产生短按”不同。
 
@@ -173,7 +173,7 @@ flowchart TD
 
 **循环：** `TB_KeysPoll → 按下事件对应计数加1 → 设置蜂鸣序列及起点 → 按经过时间更新 PA2 → 每100ms更新屏幕 → 延时2ms → 重复`。
 
-K1/K2/K3 分别触发 1/2/3 声，每声门控高电平 100ms、低电平 100ms；新事件覆盖未完成序列，同轮多键事件按 K1→K2→K3 处理，后处理的键决定蜂鸣序列。屏幕显示稳定按键状态、次数、最后一个键。可在 Watch 查看 `gpio_press_count[3]`、`gpio_last_key`；无屏幕时仍可用蜂鸣和调试变量检查。门控方式按有源蜂鸣器使用，无源蜂鸣器需要载波。
+K1/K2/K3 分别触发 1/2/3 声，每声 PWM 发声 100ms、低电平静音 100ms；新事件覆盖未完成序列，同轮多键事件按 K1→K2→K3 处理，后处理的键决定蜂鸣序列。屏幕显示稳定按键状态、次数、最后一个键。可在 Watch 查看 `gpio_press_count[3]`、`gpio_last_key`；无屏幕时仍可用蜂鸣和调试变量检查。无源蜂鸣器由共用 `buzzer.c` 的 TIM2_CH3 持续提供约 2.4kHz 载波。
 
 ### 5.2 DAC/运放 `opamp_test_main.c`
 
@@ -221,15 +221,16 @@ Watch 查看 `adc_samples[0..3]` 的 `code/pin_v/valid`、`adc_error_count`、`a
 
 该工具供仪器读数与原始采样比较，计算后由人将标定系数写回主程序，不自动拟合、保存或更新参数。它没有主程序的 OCP/UVP、ADC 故障锁存和 PI/PID，ADC 调用失败还可能显示0；不能据此认定无电压/电流。带载标定需由台架限流，方法见 [TEST/README.md](TEST/README.md)。
 
-## 7. 四个电脑端逻辑验证脚本
+## 7. 五个电脑端逻辑验证脚本
 
-这四个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
+这五个文件在电脑运行，不生成烧录固件，也不访问 OLED、DAC、INA199 或负载实物。
 
 | 脚本 | 执行流程 | 检查范围 |
 | --- | --- | --- |
 | `run_main_logic.py` | 读取 `main.c` 用户区 → 拼接模拟 HAL 和断言 → 在临时目录用本机 `cc` 编译 → 运行测试 → 自动清理 | 标定换算、DAC限幅、ADC失败、状态切换、欠压/过流、按键短长按及计时回绕 |
 | `run_measurement_calibration.py` | 将原记录送入固件共享 C 换算函数 | 35 组电流、32 组电压回代，零值、ADC 全量程单调性、上限衔接及过流余量 |
-| `run_module_logic.py` | 读取 `test_board.h/.c` 并提取实际函数 → 拼接模拟 HAL → 用本机 `cc` 严格编译 → 执行断言 → 自动清理 | 六档DAC码及异常输入、ADC通道映射/弃样/均值/错误返回、按键消抖及回绕、蜂鸣器GPIO |
+| `run_module_logic.py` | 读取 `test_board.h/.c` 并提取实际函数 → 拼接模拟 HAL → 用本机 `cc` 严格编译 → 执行断言 → 自动清理 | 六档DAC码及异常输入、ADC通道映射/弃样/均值/错误返回、按键消抖及回绕、蜂鸣器开关请求 |
+| `run_buzzer_logic.py` | 编译实际 `buzzer.c`，模拟时钟、GPIO 和定时器寄存器 | 载波频率/占空比、上电静音、APB 分频倍频、重复开关不重启载波及无效时钟 |
 | `run_cc_pid.py` | 用模拟电源模型和故障样本调用实际恒流调参算法 | 自动识别、阶跃验证、时序、控制方向、抗积分饱和与故障锁存 |
 
 ```sh
@@ -237,6 +238,7 @@ python3 tests/run_main_logic.py
 python3 tests/run_measurement_calibration.py
 python3 tests/run_module_logic.py
 python3 tests/run_cc_pid.py
+python3 tests/run_buzzer_logic.py
 ```
 
 脚本输出通过仅说明所覆盖的软件逻辑符合断言，未覆盖完整固件启动、全部测试主循环或实物电气性能。它们需要 Python3 和本机 C 编译器；板上固件则使用 ARM 交叉工具链构建。

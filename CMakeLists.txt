@@ -46,6 +46,12 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# 共用无源蜂鸣器驱动；使用 CMSIS 定时器寄存器定义，无需新增 TIM HAL。
+# 各独立固件都链接 STM32_Drivers，复用同一实现；CubeMX 不重写本文件。
+target_sources(STM32_Drivers PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/buzzer.c
+)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths

@@ -11,7 +11,7 @@
 cmake --build --preset Debug --target YLD_Cup_OLEDTest
 ```
 
-产物位于 `build/Debug/TEST_OLED/YLD_Cup_OLEDTest.elf`。固件自带 `main()`、170MHz 时钟（HSE 8MHz → PLL）和 GPIO 初始化，只复用板级启动/中断/MSP 文件与 `OLED/` 驱动。
+产物位于 `build/Debug/TEST_OLED/YLD_Cup_OLEDTest.elf`。固件自带 `main()`、170MHz 时钟（HSE 8MHz → PLL）和 GPIO 初始化，复用板级启动/中断/MSP 文件、`OLED/` 驱动和共用无源蜂鸣器驱动。
 
 ## 2. 接线
 
@@ -35,7 +35,7 @@ cmake --build --preset Debug --target YLD_Cup_OLEDTest
 | K3 | PB13 | 短按 | 自动翻页 开 / 关 |
 | K3 | PB13 | 长按 0.8 秒 | 蜂鸣器 开 / 关 |
 
-手动翻页会重新计时。自动翻页关闭后仍可用 K1/K2 翻页，动画页继续刷新。蜂鸣器由 PA2 高电平驱动，开启后会持续响；第 0 页和第 5 页会显示 `AUTO` / `BUZ` 状态。
+手动翻页会重新计时。自动翻页关闭后仍可用 K1/K2 翻页，动画页继续刷新。无源蜂鸣器共用 `Core/Src/buzzer.c`，由 PA2/AF1/TIM2_CH3 输出约 2.4kHz、50% 占空比 PWM，开启后持续响，关闭后 PA2 保持低电平；第 0 页和第 5 页会显示 `AUTO` / `BUZ` 状态。
 
 ## 4. 六个测试页
 

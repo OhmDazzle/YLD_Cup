@@ -13,13 +13,14 @@
   *    3 灰度密度图      4 图形与直线     5 动画与进度条
   *
   *  按键: K1(PB15) 上一页, K2(PB14) 下一页,
-  *        K3(PB13) 短按切换自动翻页, 长按切换蜂鸣器 (PA2 高电平=响).
+  *        K3(PB13) 短按切换自动翻页, 长按切换无源蜂鸣器 (PA2 PWM).
   ******************************************************************************
   */
 
 #include <stdint.h>
 #include "stm32g4xx_hal.h"
 #include "OLED.h"
+#include "buzzer.h"
 
 /* ---- 本固件的可调参数 ---- */
 #define TEST_PAGE_COUNT       6U
@@ -100,6 +101,7 @@ int main(void)
   HAL_Init();
   SystemClock_Config();
   MX_GPIO_Init();
+  if (Buzzer_Init() != HAL_OK) Error_Handler();
   Test_BuzzerSet(0U);
 
   /* 屏幕先做一次全白 -> 全黑闪屏, 上电即可确认背光/供电正常 */
@@ -460,10 +462,10 @@ static TestKeyEvent_t Test_KeyTakeEvent(TestKey_t *key)
   return event;
 }
 
-/* 蜂鸣器 MOS: PA2 高电平导通 */
+/* 无源蜂鸣器：共享 PA2/TIM2_CH3 PWM 驱动。 */
 static void Test_BuzzerSet(uint8_t on)
 {
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  Buzzer_Set(on);
 }
 
 /**
@@ -538,6 +540,7 @@ static void SystemClock_Config(void)
   */
 static void Error_Handler(void)
 {
+  Buzzer_Set(0U);
   __disable_irq();
   while (1)
   {

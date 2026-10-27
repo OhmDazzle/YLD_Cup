@@ -2,6 +2,7 @@
  * 模块自检保持关断，独立整机调参固件由调用方显式管理 PA1。 */
 #include <math.h>
 #include "test_board.h"
+#include "buzzer.h"
 
 volatile TB_Status tb_status;
 static ADC_HandleTypeDef adc1, adc2;
@@ -10,6 +11,7 @@ static DAC_HandleTypeDef dac1;
 static void Fail(uint32_t code)
 {
   tb_status.fault = code;
+  Buzzer_Set(0U);
   __HAL_RCC_GPIOA_CLK_ENABLE();
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, GPIO_PIN_RESET);
   __disable_irq();
@@ -66,6 +68,7 @@ void TB_Init(void)
   gpio.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &gpio);
   ClockInit();
+  if (Buzzer_Init() != HAL_OK) Fail(5U);
 }
 
 uint8_t TB_KeysPoll(void)
@@ -94,7 +97,7 @@ uint8_t TB_KeysPoll(void)
 
 void TB_Buzzer(bool on)
 {
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  Buzzer_Set(on ? 1U : 0U);
 }
 
 uint16_t TB_DacCode(float volts)

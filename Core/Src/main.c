@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "OLED.h"
+#include "buzzer.h"
 #include "measurement_calibration.h"
 #include <math.h>
 /* USER CODE END Includes */
@@ -172,7 +173,7 @@ DAC_HandleTypeDef hdac1;
 /* 引脚 -> 通道 (以 2026-10-20 G431 原理图为准, 旧使用手册不适用):
  *   PA7 = INA_V_IN  (输入电压 ÷7),  PA6 = INA_V_OUT (输出电压 ÷7)   -> ADC2
  *   PB1 = 输入电流,                  PB0 = 输出电流                   -> ADC1
- * 输出通断 MOS: PA1 (高=导通);  蜂鸣器 MOS: PA2 (高=响)
+ * 输出通断 MOS: PA1 (高=导通);  无源蜂鸣器: PA2 (TIM2_CH3 PWM)
  * 按键: PB15=K1 升, PB14=K2 降, PB13=K3 功能键 (上拉输入, 按下=低) */
 /* DAC: PA4 = DAC1_OUT1, VREF=3.3V */
 
@@ -282,6 +283,10 @@ int main(void)
   MX_DAC1_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+  if (Buzzer_Init() != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* ---- OLED: 软件 I2C, SCL=PB3, SDA=PB4, 内部含清屏 ---- */
   OLED_Init();
 
@@ -768,10 +773,10 @@ static void App_OutputEnable(uint8_t on)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-/* 蜂鸣器 MOS: PA2 高电平导通 */
+/* 无源蜂鸣器：PA2 约 2.4kHz PWM / 低电平静音。 */
 static void App_Buzzer(uint8_t on)
 {
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (on != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  Buzzer_Set(on);
 }
 
 /* 开机蜂鸣: 响 BEEP_ON_MS, 停 BEEP_GAP_MS, 共 BEEP_STARTUP_TIMES 次 (题目 1.1).

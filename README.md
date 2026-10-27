@@ -2,7 +2,7 @@
 
 优利德杯 A 题 —— STM32G431CBT6（LQFP48）工程，CLion + CMake + STM32CubeMX（G4 HAL）。
 
-当前版本 **V2.06 实测换算正式版**：两路电流采用二次校正，输出电压按实测电流补偿；主程序和独立恒流调参固件共用系数。输入电压仍为 D4 后采样，DAC 设定及主程序恒流占位保持原状。数据、公式、误差范围及发布说明见 [实测换算说明](calibration/README.md)。
+当前版本 **V2.07 无源蜂鸣器 PWM 驱动**：主程序、OLED 测试、模块测试及恒流调参固件共用 PA2/TIM2_CH3 驱动，约 2.4kHz、50% 占空比，静音时输出低电平。保留 V2.06 的实测换算：两路电流采用二次校正，输出电压按实测电流补偿；主程序和独立恒流调参固件共用系数。数据、公式、误差范围及历史发布说明见 [实测换算说明](calibration/README.md)。
 
 主程序及各测试文件的启动、循环、按键和故障处理流程，见 [主程序与测试流程 README](README_程序流程.md)。
 
@@ -40,7 +40,7 @@
 | PB0 | ADC1_IN15 | I_OUT 采样（经 R1 20mΩ 分流 + INA199A1） |
 | PB1 | ADC1_IN12 | I_IN 采样（经 R6 20mΩ 分流 + INA199A1） |
 | PA1 | GPIO 输出 | 输出通断 MOS 控制（高电平=导通） |
-| PA2 | GPIO 输出 | 蜂鸣器 MOS 控制（高电平=响） |
+| PA2 | TIM2_CH3 / AF1 | 无源蜂鸣器 Q2 控制：约 2.4kHz PWM 发声，低电平静音 |
 | PB3 | GPIO 开漏 | OLED SCL（软件 I2C，驱动运行时自行配置） |
 | PB4 | GPIO 开漏 | OLED SDA（软件 I2C） |
 | PB15 / PB13 / PB14 | GPIO 输入上拉 | 按键 K1(升) / K3(功能) / K2(降)，按下=低 |
@@ -53,6 +53,7 @@
 | 路径 | 内容 |
 | --- | --- |
 | `Core/` | 业务主逻辑（`Core/Src/main.c`，用法见 [Core/README.md](Core/README.md)）与 HAL 初始化；CubeMX 生成区不要手改 |
+| `Core/Src/buzzer.c`、`Core/Inc/buzzer.h` | 共用无源蜂鸣器驱动，独占 TIM2；不使用中断或 DMA |
 | `Drivers/` | CMSIS 与 STM32G4xx HAL（CubeMX 生成） |
 | `OLED/` | 0.96 寸 OLED 驱动（江协科技 V2.0，软件 I2C），用法见 [OLED/README.md](OLED/README.md) |
 | `TEST/` | 独立采样标定固件（单独编译/烧录，实测采样电阻与分压系数），用法见 [TEST/README.md](TEST/README.md) |
@@ -113,6 +114,7 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 | --- | --- | --- |
 | `main.c` 的 `USER CODE BEGIN/END` 区块（Includes / PTD / PD / PV / PFP / 2 / 3 / 4 / MX_GPIO_Init_2 / Error_Handler_Debug） | 全部业务逻辑与可调参数 | 原样保留 |
 | `OLED/`、`TEST/`、`TEST_OLED/`、`TEST_MODULES/` 目录 | 自建驱动 / 独立测试固件 | CubeMX 不管理，不受影响 |
+| `Core/Src/buzzer.c`、`Core/Inc/buzzer.h` | 共用无源蜂鸣器驱动 | 自建文件，CubeMX 不管理 |
 | 顶层 `CMakeLists.txt` | 自加源文件与头文件路径 | 只在首次生成，之后不再重写 |
 | `main.c` 区块之外（`MX_*_Init()`、`SystemClock_Config()` 等）和 `cmake/stm32cubemx/` | CubeMX 生成区 | **会被覆盖重写** |
 
@@ -123,7 +125,7 @@ CLion 中直接使用 Debug / Release 预设构建、烧录即可（SWD）。
 3. 确认 ADC1：PB0=IN15、PB1=IN12，单端，640.5 周期，ADC 时钟 /8。
 4. 确认 ADC2：PA6=IN3、PA7=IN4，单端，640.5 周期，ADC 时钟 /8。
 5. 确认 DAC1：PA4=DAC1_OUT1，输出缓冲使能。
-6. 确认 GPIO：PA1 输出 MOS、PA2 蜂鸣器、PB3/PB4 OLED、PB15/PB14/PB13 按键上拉。
+6. 确认 GPIO：PA1 输出 MOS、PA2 初始为低电平 GPIO、PB3/PB4 OLED、PB15/PB14/PB13 按键上拉。`Buzzer_Init()` 在 GPIO 初始化后将 PA2 切到 AF1/TIM2_CH3；TIM2 由共用驱动独占管理，无需在 `.ioc` 另开 TIM2。`buzzer.c/.h` 和顶层 CMake 的驱动源文件配置均保留。
 7. 生成后编译烧录，验证 DAC 输出、OLED、按键与保护流程。
 
 ## 注意事项

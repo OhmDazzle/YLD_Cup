@@ -63,6 +63,9 @@ static int HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin) { return !!(p->in & p
 static void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, int on) {
   if (on) p->out |= pin; else p->out &= (uint16_t)~pin;
 }
+static void Buzzer_Set(uint8_t on) {
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
 static int HAL_ADC_Stop(ADC_HandleTypeDef *h) { (void)h; return stage == 1; }
 static int HAL_ADC_ConfigChannel(ADC_HandleTypeDef *h, ADC_ChannelConfTypeDef *c) {
   h->channel=c->Channel; return stage == 2;

@@ -63,9 +63,7 @@ static unsigned codes[16] = {[3]=2000, [4]=1000, [12]=500, [15]=250};
 static jmp_buf failed;
 static uint32_t HAL_GetTick(void) { return tick; }
 static int HAL_GPIO_ReadPin(GPIO_TypeDef *p, unsigned pin) { return !!(p->pins & pin); }
-static void HAL_GPIO_WritePin(GPIO_TypeDef *p, unsigned pin, int on) {
-  if (on) p->out |= pin; else p->out &= ~pin;
-}
+static void Buzzer_Set(uint8_t on) { ga.out = on ? GPIO_PIN_2 : 0U; }
 static void Fail(uint32_t code) { tb_status.fault=code; longjmp(failed, 1); }
 static int HAL_DAC_SetValue(DAC_HandleTypeDef *h, unsigned ch, unsigned align, unsigned code) {
   (void)h; (void)ch; (void)align; written=code; return stage == 6;

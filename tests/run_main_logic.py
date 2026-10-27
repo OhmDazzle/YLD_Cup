@@ -253,9 +253,15 @@ int main(void) {
 }
 """
 
-with tempfile.TemporaryDirectory(prefix="yld-main-test-") as directory:
-    cfile = pathlib.Path(directory) / "main_logic.c"
-    binary = pathlib.Path(directory) / "main_logic"
-    cfile.write_text(stub + "\n".join(user_block(n) for n in ("PTD", "PD", "PV", "PFP", "4")) + cases)
-    subprocess.run(["cc", "-std=c11", "-I", str(ROOT / "Core/Inc"), str(cfile), "-o", str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+def run(test_cases=cases):
+    with tempfile.TemporaryDirectory(prefix="yld-main-test-") as directory:
+        cfile = pathlib.Path(directory) / "main_logic.c"
+        binary = pathlib.Path(directory) / "main_logic"
+        cfile.write_text(stub + "\n".join(user_block(n) for n in ("PTD", "PD", "PV", "PFP", "4")) + test_cases)
+        subprocess.run(["cc", "-std=c11", "-fsanitize=address,undefined",
+                        "-I", str(ROOT / "Core/Inc"), str(cfile), "-lm", "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
+
+if __name__ == "__main__":
+    run()

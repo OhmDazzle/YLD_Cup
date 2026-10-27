@@ -101,11 +101,24 @@ typedef struct
 #define VOUT_ADC_SCALE       CAL_VOUT_ADC_SCALE
 
 /* ---- DAC: 第二页两步拟合反解见 voltage_calibration.h ----
- * 负载电流用于恒压前馈; 这不是电压 PID, 不保证功率级带载能力. */
+ * 负载电流用于恒压前馈, 再叠加慢速电压反馈修正; 不保证功率级带载能力. */
 #define DAC_VMAX             3.3f    /* DAC 参考电压, 用于码值换算 */
 #define DAC_OUTPUT_MIN_V     0.2f    /* 缓冲开启后的规定输出范围 */
 #define DAC_OUTPUT_MAX_V     (DAC_VMAX - 0.2f)
 #define DAC_FULL_SCALE       4095.0f /* G431 12 位 DAC 满量程码值 */
+
+/* ---- V2.10 恒压慢速纠偏: 只调整 DAC 偏置, 不改写拟合/ADC 系数 ----
+ * 负增益通路: Vout 偏低 -> DAC 偏置减小. 仅消费新电压样本,
+ * 实际经过时间积分, 带死区、偏置/斜率限幅和抗积分饱和. */
+#define CV_TRIM_PERIOD_MS    100U
+#define CV_TRIM_SETTLE_MS    400U   /* 合闸或改目标后先等输出稳定 */
+#define CV_TRIM_MAX_GAP_MS   500U   /* 长间隔只重建滤波, 不补积历史误差 */
+#define CV_TRIM_FILTER_S     0.5f
+#define CV_TRIM_DEADBAND_V   0.010f
+#define CV_TRIM_KI           0.020f /* DAC V / (输出误差 V * s) */
+#define CV_TRIM_RATE_V_S     0.005f /* 仅慢速偏置的变化率, DAC V/s */
+#define CV_TRIM_MAX_DAC_V    0.100f /* 相对实测前馈的最大 DAC 偏置 */
+#define CV_TRIM_MAX_ERROR_V  1.0f   /* 大幅掉压时冻结纠偏, 不持续追高输出 */
 
 /* ---- 运行目标与步进 (题目 1.2 / 2.2 / 恒流模式) ---- */
 #define VOUT_TARGET_DEFAULT  8.0f    /* 恒压模式默认目标电压 */
@@ -195,6 +208,17 @@ static float measVoutNominal = 0.0f; /* PA6 名义电压, 避免电流刷新时�
 static float measIin  = 0.0f;
 static float measIout = 0.0f;
 
+/* ---- 恒压在线纠偏: RAM 状态, 待机/保护/模式或目标改变时重置 ---- */
+static float cvTrimDacV = 0.0f;
+static float cvFilteredVout = 0.0f;
+static uint32_t cvStartedTick = 0U;
+static uint32_t cvLastControlTick = 0U;
+static uint32_t cvVoltageSampleTick = 0U;
+static uint32_t cvCurrentSampleTick = 0U;
+static uint8_t cvVoltageFresh = 0U; /* 独立于保护消费的 vinFresh */
+static uint8_t cvFilterReady = 0U;
+static uint8_t cvTrimLimited = 0U;  /* Watch: 偏置达到限幅, 需排查台架 */
+
 /* ---- 按键 (K1 / K2 / K3) ---- */
 static Key_t keys[3] =
 {
@@ -231,6 +255,7 @@ static void  App_AdcFault(void);
 static void  App_SampleScheduler(void);
 static void  App_ScanKeys(void);
 static void  App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev);
+static void  App_CvReset(void);
 static void  App_ControlStep(void);
 static void  App_ProtectionCheck(void);
 static void  App_UpdateDisplay(void);
@@ -347,7 +372,7 @@ int main(void)
     /* 3. 先检查保护, 再允许本拍的恒压前馈更新 DAC */
     App_ProtectionCheck();
 
-    /* 4. 恒压电流前馈; 电压/恒流 PID 仍待实现 */
+    /* 4. 恒压电流前馈 + 慢速电压纠偏; 主程序恒流控制仍待实现 */
     App_ControlStep();
 
     /* 5. 显示刷新 (固定周期, 不用每拍都刷) */
@@ -803,6 +828,8 @@ static uint8_t App_SampleVoltageGroup(void)
   measVin = vin * VIN_ADC_SCALE;     /* PA7 */
   measVoutNominal = vout * VOUT_ADC_SCALE; /* PA6; 相对系统地 */
   measVout = Cal_Vout(measVoutNominal, measIout);
+  cvVoltageSampleTick = HAL_GetTick();
+  cvVoltageFresh = 1U;
   vinFresh = 1U;
   return 1U;
 }
@@ -821,6 +848,7 @@ static uint8_t App_SampleCurrentGroup(void)
   measIin = Cal_Iin(iin);
   measIout = Cal_Iout(iout);
   measVout = Cal_Vout(measVoutNominal, measIout);
+  cvCurrentSampleTick = HAL_GetTick();
   ioutFresh = 1U;               /* 电流数据已刷新, 供过流确认窗口消费 */
   return 1U;
 }
@@ -937,13 +965,15 @@ static void App_HandleKeyEvent(uint8_t idx, KeyEvent_t ev)
     case APP_ST_CV:
       if ((idx == KEY_IDX_UP) && (ev == KEY_EV_SHORT))
       {
-        targetV = App_Clamp(targetV + VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
-        App_DacSetVoltage(App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
+        float next = App_Clamp(targetV + VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+        if (next != targetV) { targetV = next; App_CvReset(); }
+        App_DacSetVoltage(App_TargetToDac(targetV) + cvTrimDacV);
       }
       else if ((idx == KEY_IDX_DOWN) && (ev == KEY_EV_SHORT))
       {
-        targetV = App_Clamp(targetV - VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
-        App_DacSetVoltage(App_TargetToDac(targetV)); /* 同步更新 DAC, 步进才真正生效 */
+        float next = App_Clamp(targetV - VOUT_STEP, VOUT_TARGET_MIN, VOUT_TARGET_MAX);
+        if (next != targetV) { targetV = next; App_CvReset(); }
+        App_DacSetVoltage(App_TargetToDac(targetV) + cvTrimDacV);
       }
       else if (idx == KEY_IDX_FUNC)
       {
@@ -1049,6 +1079,7 @@ static void App_SetState(AppState_t next)
   }
 
   appState = next;
+  App_CvReset();
 
   /* 状态切换后重新确认欠压, 不沿用上次运行的计时或合闸前样本. */
   vinFresh = 0U;
@@ -1104,15 +1135,71 @@ static void App_SetState(AppState_t next)
   }
 }
 
-/* 恒压每拍按最新电流更新静态前馈, 不累计电压误差.
- * 保护检查在本函数之前执行, 不复用其消费的 ioutFresh 标志.
- * 恒流 PID 仍待实现; 独立恒流调参固件直接控制 DAC, 不叠加 CV 前馈. */
+static void App_CvReset(void)
+{
+  cvTrimDacV = 0.0f;
+  cvFilteredVout = 0.0f;
+  cvStartedTick = cvLastControlTick = HAL_GetTick();
+  cvVoltageFresh = cvFilterReady = cvTrimLimited = 0U;
+}
+
+/* 两步实测前馈 + 慢速积分外环. 用输出 ADC 估计电压, 没有采样 FB 引脚.
+ * 不按循环次数累加, 不重用旧电压样本; 保护检查在本函数之前执行.
+ * 主程序恒流控制仍待实现; 独立恒流调参固件不调用本函数. */
 static void App_ControlStep(void)
 {
-  if (appState == APP_ST_CV)
+  float base, lo, hi;
+  if (appState != APP_ST_CV) return;
+  if (!isfinite(targetV) || !isfinite(measVout) ||
+      !isfinite(measVin) || !isfinite(measIout))
   {
-    App_DacSetVoltage(App_TargetToDac(targetV));
+    App_AdcFault();
+    return;
   }
+  base = App_TargetToDac(targetV);
+  lo = fmaxf(-CV_TRIM_MAX_DAC_V, DAC_OUTPUT_MIN_V - base);
+  hi = fminf(CV_TRIM_MAX_DAC_V, DAC_OUTPUT_MAX_V - base);
+  cvTrimDacV = App_Clamp(cvTrimDacV, lo, hi);
+
+  if (cvVoltageFresh != 0U)
+  {
+    uint32_t now = cvVoltageSampleTick;
+    uint32_t elapsed = now - cvLastControlTick;
+    cvVoltageFresh = 0U;
+    if ((uint32_t)(now - cvStartedTick) >= CV_TRIM_SETTLE_MS &&
+        elapsed >= CV_TRIM_PERIOD_MS)
+    {
+      cvLastControlTick = now;
+      if (cvFilterReady == 0U || elapsed > CV_TRIM_MAX_GAP_MS)
+      {
+        cvFilteredVout = measVout;
+        cvFilterReady = 1U;
+      }
+      else
+      {
+        float dt = (float)elapsed * 0.001f;
+        float error;
+        cvFilteredVout += dt / (CV_TRIM_FILTER_S + dt) * (measVout - cvFilteredVout);
+        error = targetV - cvFilteredVout;
+        if ((uint32_t)(HAL_GetTick() - cvCurrentSampleTick) <= CV_TRIM_MAX_GAP_MS &&
+            measVin >= UVP_TRIP_V && measIout <= OCP_TRIP_A &&
+            fabsf(targetV - measVout) <= CV_TRIM_MAX_ERROR_V &&
+            fabsf(error) <= CV_TRIM_MAX_ERROR_V)
+        {
+          float step;
+          if (error > CV_TRIM_DEADBAND_V) error -= CV_TRIM_DEADBAND_V;
+          else if (error < -CV_TRIM_DEADBAND_V) error += CV_TRIM_DEADBAND_V;
+          else error = 0.0f;
+          step = App_Clamp(-CV_TRIM_KI * error * dt,
+                           -CV_TRIM_RATE_V_S * dt, CV_TRIM_RATE_V_S * dt);
+          /* 直接夹紧实际施加的积分偏置, 饱和时不积攒隐藏误差. */
+          cvTrimDacV = App_Clamp(cvTrimDacV + step, lo, hi);
+        }
+      }
+    }
+  }
+  cvTrimLimited = (cvTrimDacV <= lo || cvTrimDacV >= hi) ? 1U : 0U;
+  App_DacSetVoltage(base + cvTrimDacV);
 }
 
 /* 保护检查 (题目 2.1): 过流 -> 锁存到手动解除; 欠压 -> 自动恢复.

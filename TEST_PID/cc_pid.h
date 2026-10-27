@@ -25,6 +25,8 @@ typedef struct {
   float peak, trough, periods[CC_CYCLES], amplitudes[CC_CYCLES];
   unsigned cycles, accepted;
   uint32_t started, previous_tick, changed, cycle_start, high_start;
+  uint32_t cycle_samples, last_cycle_ms, last_cycle_samples;
+  float last_cycle_amplitude;
   float overshoot_pct, final_error, ripple, settling_ms;
   float step_peak, tail_sum, tail_min, tail_max;
   unsigned tail_count;

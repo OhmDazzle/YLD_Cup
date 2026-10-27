@@ -81,6 +81,8 @@ bool CC_Start(CCTuner *t, uint32_t now, bool verify)
   t->setpoint = t->target;
   t->started = t->previous_tick = t->changed = now;
   t->cycles = t->accepted = 0U;
+  t->cycle_samples = t->last_cycle_ms = t->last_cycle_samples = 0U;
+  t->last_cycle_amplitude = 0.0f;
   t->state = CC_PRECHARGE;
   return true;
 }
@@ -133,14 +135,21 @@ static void relay_step(CCTuner *t, uint32_t now, float current)
   }
   t->peak = fmaxf(t->peak, current);
   t->trough = fminf(t->trough, current);
+  if (t->anchored) ++t->cycle_samples;
   if (t->high && current >= t->target + CC_HYST_A) {
     if (t->anchored) {
       uint32_t period = now - t->cycle_start;
       float amp = (t->peak - t->trough) * 0.5f;
       float duty = (float)(now - t->high_start) / (float)period;
+      /* 故障时也保留原始识别数据，区分快响应和小幅噪声反复越阈值。 */
+      t->last_cycle_ms = period;
+      t->last_cycle_samples = t->cycle_samples;
+      t->last_cycle_amplitude = amp;
       ++t->cycles;
       if (t->cycles > CC_DISCARD_CYCLES) {
-        if (period < CC_MIN_CYCLE_MS) { CC_Fail(t, CC_TOO_FAST); return; }
+        if (period < CC_MIN_CYCLE_MS || t->cycle_samples < CC_MIN_CYCLE_SAMPLES) {
+          CC_Fail(t, CC_TOO_FAST); return;
+        }
         if (amp < CC_MIN_AMPLITUDE_A || amp < 5.0f*CC_HYST_A) {
           CC_Fail(t, CC_NOISY); return;
         }
@@ -152,6 +161,7 @@ static void relay_step(CCTuner *t, uint32_t now, float current)
     }
     t->anchored = true;
     t->cycle_start = now;
+    t->cycle_samples = 0U;
     t->peak = t->trough = current;
     t->high = false;
     t->changed = now;

@@ -8,8 +8,9 @@
 #define CC_DAC_A            17.07091f
 #define CC_DAC_B            4.545455f
 
-#define CC_PERIOD_MS        10U
-#define CC_MAX_GAP_MS       25U
+/* 快速识别仍须检查实际点数，不能只缩短名义周期门槛。 */
+#define CC_PERIOD_MS        2U
+#define CC_MAX_GAP_MS       8U
 #define CC_DAC_MAX          3.1f
 #define CC_VOLT_LIMIT       12.0f
 #define CC_DAC_MIN          ((CC_DAC_A - CC_VOLT_LIMIT) / CC_DAC_B)
@@ -31,7 +32,8 @@
 #define CC_HALF_TIMEOUT_MS  5000U
 #define CC_DISCARD_CYCLES   2U
 #define CC_CYCLES           6U
-#define CC_MIN_CYCLE_MS     (12U * CC_PERIOD_MS)
+#define CC_MIN_CYCLE_SAMPLES 12U
+#define CC_MIN_CYCLE_MS     (CC_MIN_CYCLE_SAMPLES * CC_PERIOD_MS)
 #define CC_MIN_AMPLITUDE_A  0.015f /* 至少为迟滞的 5 倍 */
 #define CC_MAX_SPREAD       0.20f /* 周期、半幅相对均值的最大偏差 */
 #define CC_DAC_SLEW_V_S     0.5f
@@ -39,5 +41,6 @@
 #define CC_VERIFY_STEP_MS   2000U
 #define CC_VERIFY_END_MS    6000U
 #define CC_TRACE_SIZE       512U
+#define CC_TRACE_PERIOD_MS  10U /* 控制加快后仍保留约 5.12s 波形。 */
 
 #endif

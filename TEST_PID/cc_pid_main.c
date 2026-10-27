@@ -22,6 +22,7 @@ volatile CCTrace cc_trace[CC_TRACE_SIZE];
 volatile uint32_t cc_trace_count;
 volatile uint32_t cc_max_gap_ms;
 static CCTuner tuner;
+static uint32_t traced;
 
 static bool sample(CCMeasurement *m)
 {
@@ -62,7 +63,7 @@ static void draw(CCMeasurement m)
     OLED_ShowString(0, 0, "CC TEST RUNNING", OLED_6X8);
     number(8, "ISET", tuner.target, 3);
     OLED_ShowString(0, 24, "DISPLAY PAUSED", OLED_6X8);
-    OLED_ShowString(0, 32, "FOR 10ms SAMPLING", OLED_6X8);
+    OLED_ShowString(0, 32, "FOR 2ms SAMPLING", OLED_6X8);
     OLED_ShowString(0, 48, "K3:STOP OUTPUT", OLED_6X8);
     OLED_ShowString(0, 56, "WATCH: cc_status", OLED_6X8);
   } else if (tuner.state == CC_READY) {
@@ -85,8 +86,18 @@ static void draw(CCMeasurement m)
   } else if (tuner.state == CC_FAULT) {
     OLED_ShowString(0, 0, "CC FAULT  Q3 OFF", OLED_6X8);
     OLED_ShowString(0, 16, (char *)CC_ErrorText(tuner.error), OLED_6X8);
-    number(24, "VIN", m.vin, 2);
-    number(32, "IOUT", m.iout, 3);
+    if (tuner.error == CC_TOO_FAST || tuner.error == CC_NOISY || tuner.error == CC_ASYMMETRY) {
+      OLED_ShowString(0, 24, "T/ms", OLED_6X8);
+      OLED_ShowNum(36, 24, tuner.last_cycle_ms, 5, OLED_6X8);
+      OLED_ShowString(0, 32, "PTS", OLED_6X8);
+      OLED_ShowNum(36, 32, tuner.last_cycle_samples, 5, OLED_6X8);
+      number(40, "AMP/A", tuner.last_cycle_amplitude, 4);
+      OLED_ShowString(0, 48, "GAP/ms", OLED_6X8);
+      OLED_ShowNum(42, 48, cc_max_gap_ms, 3, OLED_6X8);
+    } else {
+      number(24, "VIN", m.vin, 2);
+      number(32, "IOUT", m.iout, 3);
+    }
     OLED_ShowString(0, 56, "K3:ACK TO IDLE", OLED_6X8);
   } else {
     OLED_ShowString(0, 0, "CC AUTOTUNE  Q3 OFF", OLED_6X8);
@@ -104,6 +115,7 @@ static void start(uint32_t now, bool verify)
 {
   if (CC_Start(&tuner, now, verify)) {
     cc_trace_count = cc_max_gap_ms = 0U;
+    traced = now - CC_TRACE_PERIOD_MS;
     cc_manual = tuner.gains;
   }
 }
@@ -178,7 +190,8 @@ int main(void)
     apply_output();
     cc_measurement = m;
     cc_status = tuner;
-    if (record) {
+    if (record && ((uint32_t)(now - traced) >= CC_TRACE_PERIOD_MS || !CC_Active(&tuner))) {
+      traced = now;
       uint32_t count = cc_trace_count;
       cc_trace[count % CC_TRACE_SIZE] = (CCTrace){
         now, m.iout, tuner.setpoint, tb_status.dac_v, (uint32_t)tuner.state
